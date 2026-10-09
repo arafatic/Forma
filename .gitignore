@@ -1,0 +1,23 @@
+# Node dependencies & caches
+node_modules/
+.npm/
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Tauri build artifacts
+src-tauri/target/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Environment variables & editor configs
+.env
+.env.*
+!.env.example
+.vscode/*
+!.vscode/extensions.json
+.idea/

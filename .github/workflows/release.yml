@@ -1,0 +1,62 @@
+name: Release macOS DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build macOS DMG (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: Apple Silicon
+          - target: x86_64-apple-darwin
+            arch: Intel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web application
+        run: npm run build
+
+      - name: Build and Release macOS DMG
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Forma ${{ github.ref_name }}'
+          releaseBody: |
+            ## Forma Vector Graphics Editor — ${{ github.ref_name }}
+
+            Modern offline vector graphics editor for macOS.
+
+            ### Downloads:
+            - **Apple Silicon (M1/M2/M3/M4):** Download the `*_aarch64.dmg` installer.
+            - **Intel Macs (x86_64):** Download the `*_x64.dmg` installer.
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}
