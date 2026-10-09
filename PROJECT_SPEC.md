@@ -223,11 +223,31 @@
 
 | Shortcut | Action | Scope |
 |---|---|---|
-| **`V`** | Select Tool | Global |
-| **`P`** | Pen Tool | Global |
+| **`V`** | Selection Tool | Global |
+| **`A`** | Direct Selection Tool | Global |
+| **`Q`** | Lasso Tool | Global |
 | **`M`** | Rectangle Tool | Global |
 | **`L`** | Ellipse Tool | Global |
-| **`T`** | Text Tool | Global |
+| **`\`** | Line Segment Tool | Global |
+| **`P`** | Pen Tool | Global |
+| **`B`** | Paintbrush Tool | Global |
+| **`N`** | Pencil Tool | Global |
+| **`Shift + E`** | Eraser Tool | Global |
+| **`C`** | Scissors Tool | Global |
+| **`R`** | Rotate Tool | Global |
+| **`S`** | Scale Tool | Global |
+| **`Shift + M`** | Shape Builder Tool | Global |
+| **`T`** | Type Tool | Global |
+| **`H`** | Hand Tool | Global |
+| **`Z`** | Zoom Tool | Global |
+| **`I`** | Eyedropper Tool | Global |
+| **`G`** | Gradient Tool | Global |
+| **`X`** / **`Shift + X`** | Swap Fill & Stroke | Global |
+| **`D`** | Default Black & White Colors | Global |
+| **`Shift + D`** | Cycle Drawing Mode (Normal, Behind, Inside) | Global |
+| **`,`** | Set Solid Color | Global |
+| **`.`** | Set Gradient | Global |
+| **`/`** | Set None (Transparent) | Global |
 | **`Cmd + Shift + P`** | Place Asset (SVG, Images, PSD, AI, EPS) | Global |
 | **`Space` + Drag** / **Middle Click** | Pan Canvas | Canvas |
 | **Wheel** | Zoom centered on cursor | Canvas |

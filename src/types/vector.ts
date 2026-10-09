@@ -117,7 +117,40 @@ export type VectorElement =
   | TextElement
   | ImageElement;
 
-export type ToolType = 'select' | 'pen' | 'rectangle' | 'ellipse' | 'text';
+export type ToolType =
+  // Select Category
+  | 'select'
+  | 'direct-select'
+  | 'lasso'
+  // Shapes Category
+  | 'rectangle'
+  | 'rounded-rect'
+  | 'ellipse'
+  | 'polygon'
+  | 'star'
+  | 'line'
+  // Draw Category
+  | 'pen'
+  | 'curvature'
+  | 'brush'
+  | 'pencil'
+  | 'eraser'
+  | 'scissors'
+  // Modify Category
+  | 'rotate'
+  | 'scale'
+  | 'shape-builder'
+  // Type Category
+  | 'text'
+  | 'vertical-text'
+  // Navigate Category
+  | 'hand'
+  | 'zoom'
+  // Color Category
+  | 'eyedropper'
+  | 'gradient-tool';
+
+export type DrawingMode = 'normal' | 'behind' | 'inside';
 
 export interface ViewTransform {
   pan: Point;

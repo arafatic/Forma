@@ -19,6 +19,7 @@ import {
   ExportMode,
   Point,
   TextAlign,
+  DrawingMode,
 } from './types/vector';
 import { downloadSvgFile, downloadPngFile } from './engine/svgExporter';
 import { applyBooleanOperation } from './engine/booleanOps';
@@ -110,6 +111,7 @@ export const App: React.FC = () => {
   const [defaultStroke, setDefaultStroke] = useState<string>('#38bdf8');
   const [defaultStrokeWidth, setDefaultStrokeWidth] = useState<number>(2.5);
   const [defaultOpacity, setDefaultOpacity] = useState<number>(1);
+  const [drawingMode, setDrawingMode] = useState<DrawingMode>('normal');
 
   const [canvasRevision, setCanvasRevision] = useState<number>(0);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
@@ -224,7 +226,8 @@ export const App: React.FC = () => {
   }, []);
 
   // Change properties of selected elements or update defaults
-  const handleChangeProperties = (props: {
+  const handleChangeProperties = useCallback(
+    (props: {
     fill?: string;
     fillType?: FillType;
     gradient?: GradientFill;
@@ -341,7 +344,28 @@ export const App: React.FC = () => {
       });
       updateElementsWithHistory(updated);
     }
-  };
+  }, [elements, selectedIds, updateElementsWithHistory]);
+
+  // Swaps Fill and Stroke colors
+  const handleSwapFillStroke = useCallback(() => {
+    const curFill = selectedElement ? selectedElement.fill : defaultFill;
+    const curStroke = selectedElement ? selectedElement.stroke : defaultStroke;
+    handleChangeProperties({
+      fill: curStroke,
+      stroke: curFill,
+    });
+    showToast('Swapped Fill and Stroke');
+  }, [selectedElement, defaultFill, defaultStroke, handleChangeProperties, showToast]);
+
+  // Resets Fill and Stroke to Default (Black / White)
+  const handleDefaultColors = useCallback(() => {
+    handleChangeProperties({
+      fill: 'none',
+      stroke: '#000000',
+      strokeWidth: 2,
+    });
+    showToast('Default Fill & Stroke');
+  }, [handleChangeProperties, showToast]);
 
   // Boolean Pathfinder Operations (Unite, Minus Front, Intersect, Exclude)
   const handleApplyPathfinder = useCallback(
@@ -827,10 +851,44 @@ export const App: React.FC = () => {
 
       // Tool shortcuts (single keys)
       else if (!isCmdOrCtrl && key === 'v') setCurrentTool('select');
-      else if (!isCmdOrCtrl && key === 'p') setCurrentTool('pen');
-      else if (!isCmdOrCtrl && key === 'm') setCurrentTool('rectangle');
+      else if (!isCmdOrCtrl && key === 'a') setCurrentTool('direct-select');
+      else if (!isCmdOrCtrl && key === 'q') setCurrentTool('lasso');
+      else if (!isCmdOrCtrl && !e.shiftKey && key === 'm') setCurrentTool('rectangle');
+      else if (!isCmdOrCtrl && e.shiftKey && key === 'm') setCurrentTool('shape-builder');
       else if (!isCmdOrCtrl && key === 'l') setCurrentTool('ellipse');
+      else if (!isCmdOrCtrl && key === '\\') setCurrentTool('line');
+      else if (!isCmdOrCtrl && key === 'p') setCurrentTool('pen');
+      else if (!isCmdOrCtrl && key === 'b') setCurrentTool('brush');
+      else if (!isCmdOrCtrl && key === 'n') setCurrentTool('pencil');
+      else if (!isCmdOrCtrl && e.shiftKey && key === 'e') setCurrentTool('eraser');
+      else if (!isCmdOrCtrl && !e.shiftKey && key === 'c') setCurrentTool('scissors');
+      else if (!isCmdOrCtrl && key === 'r') setCurrentTool('rotate');
+      else if (!isCmdOrCtrl && key === 's') setCurrentTool('scale');
       else if (!isCmdOrCtrl && key === 't') setCurrentTool('text');
+      else if (!isCmdOrCtrl && key === 'h') setCurrentTool('hand');
+      else if (!isCmdOrCtrl && key === 'z') setCurrentTool('zoom');
+      else if (!isCmdOrCtrl && key === 'i') setCurrentTool('eyedropper');
+      else if (!isCmdOrCtrl && key === 'g') setCurrentTool('gradient-tool');
+      else if (!isCmdOrCtrl && (key === 'x' || (e.shiftKey && key === 'x'))) {
+        e.preventDefault();
+        handleSwapFillStroke();
+      } else if (!isCmdOrCtrl && !e.shiftKey && key === 'd') {
+        e.preventDefault();
+        handleDefaultColors();
+      } else if (!isCmdOrCtrl && e.shiftKey && key === 'd') {
+        e.preventDefault();
+        setDrawingMode((prev) => (prev === 'normal' ? 'behind' : prev === 'behind' ? 'inside' : 'normal'));
+        showToast('Toggled Drawing Mode');
+      } else if (!isCmdOrCtrl && key === ',') {
+        handleChangeProperties({ fill: '#ffffff' });
+        showToast('Color set to Solid');
+      } else if (!isCmdOrCtrl && key === '.') {
+        handleChangeProperties({ fill: '#38bdf8' });
+        showToast('Gradient set');
+      } else if (!isCmdOrCtrl && key === '/') {
+        handleChangeProperties({ fill: 'none' });
+        showToast('Fill set to None');
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -858,6 +916,10 @@ export const App: React.FC = () => {
     handleResetZoom,
     handleToggleGrid,
     handleToggleLayers,
+    handleSwapFillStroke,
+    handleDefaultColors,
+    handleChangeProperties,
+    showToast,
   ]);
 
   return (
@@ -952,6 +1014,16 @@ export const App: React.FC = () => {
         <Toolbar
           currentTool={currentTool}
           onSelectTool={setCurrentTool}
+          fillColor={selectedElement ? selectedElement.fill : defaultFill}
+          strokeColor={selectedElement ? selectedElement.stroke : defaultStroke}
+          strokeWidth={selectedElement ? selectedElement.strokeWidth : defaultStrokeWidth}
+          fillType={selectedElement ? selectedElement.fillType : 'solid'}
+          onFillChange={(c) => handleChangeProperties({ fill: c })}
+          onStrokeChange={(c) => handleChangeProperties({ stroke: c })}
+          onSwapFillStroke={handleSwapFillStroke}
+          onDefaultColors={handleDefaultColors}
+          drawingMode={drawingMode}
+          onDrawingModeChange={setDrawingMode}
           className={showLayers ? 'left-[272px]' : 'left-4'}
         />
 
@@ -973,6 +1045,7 @@ export const App: React.FC = () => {
           onElementsChange={updateElementsWithHistory}
           onSelectElement={handleSelectCanvas}
           onImportAssets={handleImportAssets}
+          onUpdateElement={handleChangeProperties}
         />
 
         {/* Right Docked Sidebar: Properties, Layers, and Libraries */}

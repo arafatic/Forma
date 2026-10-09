@@ -47,6 +47,7 @@ interface CanvasProps {
   onElementsChange: (elements: VectorElement[]) => void;
   onSelectElement: (id: string | null, isShift?: boolean) => void;
   onImportAssets?: (files: FileList | File[], targetPos?: Point) => void;
+  onUpdateElement?: (props: Partial<VectorElement>) => void;
 }
 
 export type ActiveTransform =
@@ -70,6 +71,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   onElementsChange,
   onSelectElement,
   onImportAssets,
+  onUpdateElement,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -246,8 +248,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     const screenY = e.clientY - rect.top;
     const worldPos = screenToWorld(screenX, screenY);
 
-    // 1. Pan Canvas (Middle mouse button OR Space + Left click)
-    if (e.button === 1 || (e.button === 0 && isSpacePressed)) {
+    // 1. Pan Canvas (Middle mouse button OR Space + Left click OR Hand tool)
+    if (e.button === 1 || (e.button === 0 && (isSpacePressed || currentTool === 'hand'))) {
       setIsPanning(true);
       setPanStart({ x: e.clientX - transform.pan.x, y: e.clientY - transform.pan.y });
       return;
@@ -256,9 +258,65 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (e.button !== 0) return; // Only process left click below
 
     // -----------------------------------------------------------
-    // TOOL: PEN TOOL (Core Illustrator-style Bézier engine)
+    // TOOL: ZOOM TOOL (Z)
     // -----------------------------------------------------------
-    if (currentTool === 'pen') {
+    if (currentTool === 'zoom') {
+      const zoomFactor = e.altKey ? 1 / 1.4 : 1.4;
+      const newZoom = Math.max(0.05, Math.min(32, transform.zoom * zoomFactor));
+      const newPan = {
+        x: screenX - (screenX - transform.pan.x) * (newZoom / transform.zoom),
+        y: screenY - (screenY - transform.pan.y) * (newZoom / transform.zoom),
+      };
+      onTransformChange({ pan: newPan, zoom: newZoom });
+      return;
+    }
+
+    // -----------------------------------------------------------
+    // TOOL: EYEDROPPER TOOL (I)
+    // -----------------------------------------------------------
+    if (currentTool === 'eyedropper') {
+      const hit = elements.slice().reverse().find((el) => {
+        if (!el.visible) return false;
+        const box = getElementBoundingBox(el);
+        return worldPos.x >= box.minX && worldPos.x <= box.maxX && worldPos.y >= box.minY && worldPos.y <= box.maxY;
+      });
+      if (hit && onUpdateElement) {
+        onUpdateElement({ fill: hit.fill, stroke: hit.stroke, strokeWidth: hit.strokeWidth });
+      }
+      return;
+    }
+
+    // -----------------------------------------------------------
+    // TOOL: ERASER & SCISSORS TOOLS (Shift+E / C)
+    // -----------------------------------------------------------
+    if (currentTool === 'eraser' || currentTool === 'scissors') {
+      let hitIndex = -1;
+      for (let i = elements.length - 1; i >= 0; i--) {
+        const el = elements[i];
+        if (!el.visible || el.locked) continue;
+        const box = getElementBoundingBox(el);
+        if (worldPos.x >= box.minX && worldPos.x <= box.maxX && worldPos.y >= box.minY && worldPos.y <= box.maxY) {
+          hitIndex = i;
+          break;
+        }
+      }
+      if (hitIndex !== -1) {
+        const next = elements.filter((_, idx) => idx !== hitIndex);
+        onElementsChange(next);
+        onSelectElement(null);
+      }
+      return;
+    }
+
+    // -----------------------------------------------------------
+    // TOOL: PEN, CURVATURE, BRUSH, PENCIL TOOLS
+    // -----------------------------------------------------------
+    if (
+      currentTool === 'pen' ||
+      currentTool === 'curvature' ||
+      currentTool === 'brush' ||
+      currentTool === 'pencil'
+    ) {
       // Check if clicking near the starting anchor point to close the path
       if (activePenPath && isNearFirstAnchor(worldPos, activePenPath, transform.zoom)) {
         const closedPath: PathElement = {
@@ -314,24 +372,18 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // -----------------------------------------------------------
-    // TOOL: RECTANGLE & ELLIPSE TOOLS
+    // TOOL: SHAPES (Rectangle, Rounded Rect, Ellipse, Polygon, Star, Line)
     // -----------------------------------------------------------
-    if (currentTool === 'rectangle' || currentTool === 'ellipse') {
+    if (
+      currentTool === 'rectangle' ||
+      currentTool === 'rounded-rect' ||
+      currentTool === 'ellipse' ||
+      currentTool === 'polygon' ||
+      currentTool === 'star' ||
+      currentTool === 'line'
+    ) {
       setShapeStartPos(worldPos);
-      if (currentTool === 'rectangle') {
-        setActiveShape({
-          id: `rect_${Date.now()}`,
-          type: 'rectangle',
-          x: worldPos.x,
-          y: worldPos.y,
-          width: 0,
-          height: 0,
-          fill: defaultFill,
-          stroke: defaultStroke,
-          strokeWidth: defaultStrokeWidth,
-          opacity: defaultOpacity,
-        });
-      } else {
+      if (currentTool === 'ellipse') {
         setActiveShape({
           id: `ellipse_${Date.now()}`,
           type: 'ellipse',
@@ -344,14 +396,27 @@ export const Canvas: React.FC<CanvasProps> = ({
           strokeWidth: defaultStrokeWidth,
           opacity: defaultOpacity,
         });
+      } else {
+        setActiveShape({
+          id: `rect_${Date.now()}`,
+          type: 'rectangle',
+          x: worldPos.x,
+          y: worldPos.y,
+          width: 0,
+          height: 0,
+          fill: defaultFill,
+          stroke: defaultStroke,
+          strokeWidth: defaultStrokeWidth,
+          opacity: defaultOpacity,
+        });
       }
       return;
     }
 
     // -----------------------------------------------------------
-    // TOOL: TEXT TOOL (T)
+    // TOOL: TEXT TOOL & VERTICAL TEXT (T)
     // -----------------------------------------------------------
-    if (currentTool === 'text') {
+    if (currentTool === 'text' || currentTool === 'vertical-text') {
       const defaultText = 'Heading';
       const initialMetrics = measureTextBounds(defaultText, 'Inter, sans-serif', 28, 400, 1.2);
       const newText: TextElement = {
@@ -383,9 +448,17 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // -----------------------------------------------------------
-    // TOOL: SELECT TOOL (8-Point Bounding Box, Scaling, Rotating, Translating)
+    // TOOL: SELECT, DIRECT SELECT, LASSO, ROTATE, SCALE, SHAPE BUILDER
     // -----------------------------------------------------------
-    if (currentTool === 'select') {
+    if (
+      currentTool === 'select' ||
+      currentTool === 'direct-select' ||
+      currentTool === 'lasso' ||
+      currentTool === 'rotate' ||
+      currentTool === 'scale' ||
+      currentTool === 'shape-builder' ||
+      currentTool === 'gradient-tool'
+    ) {
       // 0. If selected element has gradient, test gradient handle hit
       const selectedEl = elements.find((el) => el.id === selectedId);
       if (selectedEl) {
@@ -509,8 +582,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    // 2. Pen Tool: Pulling out Bézier handles while dragging
-    if (currentTool === 'pen') {
+    // 2. Pen / Brush / Pencil Tools: Pulling out Bézier handles while dragging
+    if (
+      currentTool === 'pen' ||
+      currentTool === 'curvature' ||
+      currentTool === 'brush' ||
+      currentTool === 'pencil'
+    ) {
       setPenMousePos(worldPos);
 
       // Check start anchor closing hover indicator
@@ -584,7 +662,15 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // 4. Select Tool Transformations (Translating, Scaling, Rotating)
-    if (currentTool === 'select') {
+    if (
+      currentTool === 'select' ||
+      currentTool === 'direct-select' ||
+      currentTool === 'lasso' ||
+      currentTool === 'rotate' ||
+      currentTool === 'scale' ||
+      currentTool === 'shape-builder' ||
+      currentTool === 'gradient-tool'
+    ) {
       if (activeTransform) {
         if (activeTransform.type === 'translate') {
           const dx = worldPos.x - activeTransform.startMouse.x;
@@ -686,7 +772,12 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Cursor style based on active tool, transformation, and hover zone
   const getCursorStyle = (): React.CSSProperties => {
-    if (isPanning || isSpacePressed) return { cursor: 'grab' };
+    if (isPanning || isSpacePressed || currentTool === 'hand') return { cursor: isPanning ? 'grabbing' : 'grab' };
+    if (currentTool === 'zoom') return { cursor: 'zoom-in' };
+    if (currentTool === 'eyedropper') return { cursor: 'crosshair' };
+    if (currentTool === 'eraser' || currentTool === 'scissors') return { cursor: 'crosshair' };
+    if (currentTool === 'rotate') return { cursor: 'grab' };
+    if (currentTool === 'scale') return { cursor: 'nwse-resize' };
     if (activeTransform?.type === 'rotate') {
       return {
         cursor: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpolyline points='21 3 21 8 16 8'/%3E%3C/svg%3E") 12 12, crosshair`,
@@ -695,9 +786,25 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (activeTransform?.type === 'translate') return { cursor: 'move' };
     if (hoverCursor) return { cursor: hoverCursor };
 
-    if (currentTool === 'pen') return { cursor: isHoveringClosePoint ? 'cell' : 'crosshair' };
-    if (currentTool === 'rectangle' || currentTool === 'ellipse') return { cursor: 'crosshair' };
-    if (currentTool === 'text') return { cursor: 'text' };
+    if (
+      currentTool === 'pen' ||
+      currentTool === 'curvature' ||
+      currentTool === 'brush' ||
+      currentTool === 'pencil'
+    ) {
+      return { cursor: isHoveringClosePoint ? 'cell' : 'crosshair' };
+    }
+    if (
+      currentTool === 'rectangle' ||
+      currentTool === 'rounded-rect' ||
+      currentTool === 'ellipse' ||
+      currentTool === 'polygon' ||
+      currentTool === 'star' ||
+      currentTool === 'line'
+    ) {
+      return { cursor: 'crosshair' };
+    }
+    if (currentTool === 'text' || currentTool === 'vertical-text') return { cursor: 'text' };
     return { cursor: 'default' };
   };
 
