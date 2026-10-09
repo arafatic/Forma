@@ -25,6 +25,7 @@ export interface RenderContext {
   selectedAnchorIndex: number | null;
   showGrid?: boolean;
   artboard?: Artboard | null;
+  isArtboardTool?: boolean;
 }
 
 /**
@@ -50,12 +51,14 @@ export function renderCanvas(rc: RenderContext) {
     selectedAnchorIndex,
     showGrid,
     artboard,
+    isArtboardTool,
   } = rc;
 
-  // Clear canvas
+  // Clear full canvas buffer
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.restore();
 
   // 1. Draw subtle workspace grid (if enabled)
   if (showGrid !== false) {
@@ -63,12 +66,13 @@ export function renderCanvas(rc: RenderContext) {
   }
 
   // Apply camera transform: Pan & Zoom
+  ctx.save();
   ctx.translate(pan.x, pan.y);
   ctx.scale(zoom, zoom);
 
   // 1.5 Draw Artboard Surface & Dimension Label (if artboard is defined)
   if (artboard) {
-    drawArtboard(ctx, artboard, zoom);
+    drawArtboard(ctx, artboard, zoom, isArtboardTool);
   }
 
   // 2. Draw committed elements
@@ -109,7 +113,12 @@ export function renderCanvas(rc: RenderContext) {
 /**
  * Renders the elevated artboard canvas surface with drop shadow, border, and dimension label
  */
-export function drawArtboard(ctx: CanvasRenderingContext2D, artboard: Artboard, zoom: number) {
+export function drawArtboard(
+  ctx: CanvasRenderingContext2D,
+  artboard: Artboard,
+  zoom: number,
+  isArtboardTool = false
+) {
   ctx.save();
 
   // 1. Elevation shadow
@@ -131,16 +140,70 @@ export function drawArtboard(ctx: CanvasRenderingContext2D, artboard: Artboard, 
 
   // 3. Reset shadow for outline
   ctx.shadowColor = 'transparent';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-  ctx.lineWidth = Math.max(1, 1.2 / zoom);
-  ctx.strokeRect(artboard.x, artboard.y, artboard.width, artboard.height);
 
-  // 4. Subtle artboard label above top-left corner
-  const fontSize = Math.max(10, Math.min(13, 11 / zoom));
-  ctx.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-  const label = `${artboard.name} — ${Math.round(artboard.width)} × ${Math.round(artboard.height)} px`;
-  ctx.fillText(label, artboard.x, artboard.y - Math.max(6, 8 / zoom));
+  if (isArtboardTool) {
+    // Active Artboard Mode: Sky-blue bounding outline
+    ctx.strokeStyle = '#0ea5e9';
+    ctx.lineWidth = Math.max(2, 2.5 / zoom);
+    ctx.setLineDash([6 / zoom, 4 / zoom]);
+    ctx.strokeRect(artboard.x, artboard.y, artboard.width, artboard.height);
+    ctx.setLineDash([]);
+
+    // 8 Resize Handles (Corner & Edge Midpoints)
+    const handleSize = Math.max(7, 9 / zoom);
+    const halfH = handleSize / 2;
+    const handles = [
+      { x: artboard.x, y: artboard.y }, // nw
+      { x: artboard.x + artboard.width / 2, y: artboard.y }, // n
+      { x: artboard.x + artboard.width, y: artboard.y }, // ne
+      { x: artboard.x + artboard.width, y: artboard.y + artboard.height / 2 }, // e
+      { x: artboard.x + artboard.width, y: artboard.y + artboard.height }, // se
+      { x: artboard.x + artboard.width / 2, y: artboard.y + artboard.height }, // s
+      { x: artboard.x, y: artboard.y + artboard.height }, // sw
+      { x: artboard.x, y: artboard.y + artboard.height / 2 }, // w
+    ];
+
+    for (const h of handles) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = Math.max(1.5, 2 / zoom);
+      ctx.beginPath();
+      ctx.rect(h.x - halfH, h.y - halfH, handleSize, handleSize);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Prominent floating dimension badge with pill
+    const fontSize = Math.max(11, Math.min(14, 12 / zoom));
+    ctx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    const label = `${artboard.name} • ${Math.round(artboard.width)} × ${Math.round(artboard.height)} ${artboard.unit || 'px'}`;
+    const badgeWidth = ctx.measureText(label).width + 16 / zoom;
+    const badgeHeight = Math.max(20, 24 / zoom);
+    const badgeY = artboard.y - badgeHeight - 6 / zoom;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.strokeStyle = '#0ea5e9';
+    ctx.lineWidth = Math.max(1, 1.5 / zoom);
+    ctx.beginPath();
+    ctx.roundRect(artboard.x, badgeY, badgeWidth, badgeHeight, 4 / zoom);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillText(label, artboard.x + 8 / zoom, badgeY + badgeHeight - 7 / zoom);
+  } else {
+    // Standard subtle artboard border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = Math.max(1, 1.2 / zoom);
+    ctx.strokeRect(artboard.x, artboard.y, artboard.width, artboard.height);
+
+    // 4. Subtle artboard label above top-left corner
+    const fontSize = Math.max(10, Math.min(13, 11 / zoom));
+    ctx.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    const label = `${artboard.name} — ${Math.round(artboard.width)} × ${Math.round(artboard.height)} px`;
+    ctx.fillText(label, artboard.x, artboard.y - Math.max(6, 8 / zoom));
+  }
 
   ctx.restore();
 }
@@ -359,7 +422,16 @@ export function drawPathElement(ctx: CanvasRenderingContext2D, path: PathElement
 function drawRectElement(ctx: CanvasRenderingContext2D, rect: RectElement) {
   ctx.save();
   ctx.beginPath();
-  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  const radius = Math.min(
+    Math.max(0, rect.cornerRadius || rect.rx || 0),
+    Math.abs(rect.width) / 2,
+    Math.abs(rect.height) / 2
+  );
+  if (radius > 0 && typeof ctx.roundRect === 'function') {
+    ctx.roundRect(rect.x, rect.y, rect.width, rect.height, radius);
+  } else {
+    ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  }
 
   const fillStyle = getFillStyle(ctx, rect);
   if (fillStyle) {

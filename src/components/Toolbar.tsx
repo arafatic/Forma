@@ -10,19 +10,22 @@ import {
   Star,
   Slash,
   PenTool,
+  Anchor,
   Spline,
   Paintbrush,
   Pencil,
   Eraser,
   Scissors,
   RotateCw,
+  FlipHorizontal,
   Scaling,
+  Blend,
   Shapes,
   Type,
   Hand,
   ZoomIn,
+  LayoutGrid,
   Pipette,
-  Blend,
   ChevronsRight,
   ChevronsLeft,
   ArrowLeftRight,
@@ -91,8 +94,10 @@ const TOOL_SLOTS: ToolSlot[] = [
     category: 'Draw',
     subTools: [
       { id: 'pen', name: 'Pen Tool', hotkey: 'P', icon: PenTool },
+      { id: 'anchor-point', name: 'Anchor Point Tool', hotkey: '⇧C', icon: Anchor },
       { id: 'curvature', name: 'Curvature Tool', hotkey: '', icon: Spline },
       { id: 'brush', name: 'Paintbrush Tool', hotkey: 'B', icon: Paintbrush },
+      { id: 'blob-brush', name: 'Blob Brush Tool', hotkey: '⇧B', icon: Paintbrush },
       { id: 'pencil', name: 'Pencil Tool', hotkey: 'N', icon: Pencil },
       { id: 'eraser', name: 'Eraser Tool', hotkey: '⇧E', icon: Eraser },
       { id: 'scissors', name: 'Scissors Tool', hotkey: 'C', icon: Scissors },
@@ -104,7 +109,9 @@ const TOOL_SLOTS: ToolSlot[] = [
     category: 'Modify',
     subTools: [
       { id: 'rotate', name: 'Rotate Tool', hotkey: 'R', icon: RotateCw },
+      { id: 'reflect', name: 'Reflect Tool', hotkey: 'O', icon: FlipHorizontal },
       { id: 'scale', name: 'Scale Tool', hotkey: 'S', icon: Scaling },
+      { id: 'blend', name: 'Blend Tool', hotkey: 'W', icon: Blend },
       { id: 'shape-builder', name: 'Shape Builder Tool', hotkey: '⇧M', icon: Shapes },
     ],
   },
@@ -124,6 +131,7 @@ const TOOL_SLOTS: ToolSlot[] = [
     subTools: [
       { id: 'hand', name: 'Hand Tool', hotkey: 'H', icon: Hand },
       { id: 'zoom', name: 'Zoom Tool', hotkey: 'Z', icon: ZoomIn },
+      { id: 'artboard', name: 'Artboard Tool', hotkey: '⇧O', icon: LayoutGrid },
     ],
   },
   // 7. Color Category
@@ -296,9 +304,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   return (
     <aside
       ref={toolbarRef}
-      className={`absolute top-16 z-20 flex flex-col items-center p-1 bg-[#18181b]/95 backdrop-blur-md border border-white/10 rounded-xl shadow-2xl shadow-black/70 select-none transition-all duration-200 ${
+      className={`relative z-20 flex flex-col items-center py-2 px-1 bg-[#18181b] border-r border-white/[0.08] select-none h-full transition-all duration-150 shrink-0 ${
         isDoubleColumn ? 'w-20' : 'w-12'
-      } ${className || 'left-4'}`}
+      } ${className || ''}`}
     >
       {/* 1. Header: 1/2 Column Toggle Chevron */}
       <div className="w-full flex items-center justify-center pb-1 border-b border-white/[0.08] mb-1">

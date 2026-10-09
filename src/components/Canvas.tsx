@@ -48,6 +48,8 @@ interface CanvasProps {
   onSelectElement: (id: string | null, isShift?: boolean) => void;
   onImportAssets?: (files: FileList | File[], targetPos?: Point) => void;
   onUpdateElement?: (props: Partial<VectorElement>) => void;
+  onUpdateArtboard?: (ab: Artboard) => void;
+  onSelectTool?: (tool: ToolType) => void;
 }
 
 export type ActiveTransform =
@@ -72,6 +74,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   onSelectElement,
   onImportAssets,
   onUpdateElement,
+  onUpdateArtboard,
+  onSelectTool,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -86,6 +90,13 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [penMousePos, setPenMousePos] = useState<Point | null>(null);
   const [isHoveringClosePoint, setIsHoveringClosePoint] = useState<boolean>(false);
   const [isDraggingPenHandle, setIsDraggingPenHandle] = useState<boolean>(false);
+
+  // Artboard Tool Dragging State (resizing handles or moving)
+  const [activeArtboardDrag, setActiveArtboardDrag] = useState<{
+    handle: HandleType | 'move';
+    startMouse: Point;
+    origArtboard: Artboard;
+  } | null>(null);
 
   // Shape creation state (Rect, Ellipse)
   const [shapeStartPos, setShapeStartPos] = useState<Point | null>(null);
@@ -121,7 +132,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     setIsDraggingPenHandle(false);
   }, [activePenPath, elements, onElementsChange, onSelectElement]);
 
-  // Handle keyboard shortcuts (Escape, Enter to commit path, Space for panning)
+  // Handle keyboard shortcuts (Escape, Enter to commit path, Space for panning, Escape/V to exit artboard)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) {
@@ -131,6 +142,9 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (activePenPath) {
           commitPenPath();
         }
+      }
+      if (currentTool === 'artboard' && (e.key === 'Escape' || e.key.toLowerCase() === 'v')) {
+        onSelectTool?.('select');
       }
     };
 
@@ -147,48 +161,61 @@ export const Canvas: React.FC<CanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activePenPath, commitPenPath]);
+  }, [activePenPath, commitPenPath, currentTool, onSelectTool]);
 
-  // Main Render Loop
+  // Main Render Loop tied to requestAnimationFrame
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    let animId: number;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const render = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-    }
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
 
-    ctx.save();
-    ctx.scale(dpr, dpr);
+      if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+      }
 
-    // Merge active shape being drawn with elements for rendering
-    const allElements = activeShape ? [...elements, activeShape] : elements;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
 
-    renderCanvas({
-      ctx,
-      width,
-      height,
-      pan: transform.pan,
-      zoom: transform.zoom,
-      elements: allElements,
-      selectedId,
-      activePenPath,
-      penMousePos,
-      isHoveringClosePoint,
-      selectedAnchorIndex: null,
-      showGrid,
-      artboard,
-    });
+      ctx.save();
+      ctx.scale(dpr, dpr);
 
-    ctx.restore();
+      // Merge active shape being drawn with elements for rendering
+      const allElements = activeShape ? [...elements, activeShape] : elements;
+
+      renderCanvas({
+        ctx,
+        width,
+        height,
+        pan: transform.pan,
+        zoom: transform.zoom,
+        elements: allElements,
+        selectedId,
+        activePenPath,
+        penMousePos,
+        isHoveringClosePoint,
+        selectedAnchorIndex: null,
+        showGrid,
+        artboard,
+        isArtboardTool: currentTool === 'artboard',
+      });
+
+      ctx.restore();
+    };
+
+    animId = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(animId);
   }, [
     elements,
     transform,
@@ -199,6 +226,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     activeShape,
     showGrid,
     artboard,
+    currentTool,
   ]);
 
   // Resize observer to ensure crisp canvas on window resize
@@ -448,6 +476,42 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // -----------------------------------------------------------
+    // TOOL: ARTBOARD TOOL (Shift+O)
+    // -----------------------------------------------------------
+    if (currentTool === 'artboard' && artboard) {
+      const artboardBox: BoundingBox = {
+        minX: artboard.x,
+        minY: artboard.y,
+        maxX: artboard.x + artboard.width,
+        maxY: artboard.y + artboard.height,
+        width: artboard.width,
+        height: artboard.height,
+        centerX: artboard.x + artboard.width / 2,
+        centerY: artboard.y + artboard.height / 2,
+      };
+      const hit = hitTestBoundingBox(worldPos, artboardBox, transform.zoom);
+      if (hit) {
+        if (hit.type === 'handle') {
+          setActiveArtboardDrag({
+            handle: hit.handle,
+            startMouse: worldPos,
+            origArtboard: { ...artboard },
+          });
+          return;
+        }
+        if (hit.type === 'body') {
+          setActiveArtboardDrag({
+            handle: 'move',
+            startMouse: worldPos,
+            origArtboard: { ...artboard },
+          });
+          return;
+        }
+      }
+      return;
+    }
+
+    // -----------------------------------------------------------
     // TOOL: SELECT, DIRECT SELECT, LASSO, ROTATE, SCALE, SHAPE BUILDER
     // -----------------------------------------------------------
     if (
@@ -661,6 +725,73 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
+    // 3.5. Artboard Tool (Resize / Move)
+    if (currentTool === 'artboard' && artboard) {
+      if (activeArtboardDrag && onUpdateArtboard) {
+        if (activeArtboardDrag.handle === 'move') {
+          const dx = worldPos.x - activeArtboardDrag.startMouse.x;
+          const dy = worldPos.y - activeArtboardDrag.startMouse.y;
+          onUpdateArtboard({
+            ...activeArtboardDrag.origArtboard,
+            x: Math.round(activeArtboardDrag.origArtboard.x + dx),
+            y: Math.round(activeArtboardDrag.origArtboard.y + dy),
+          });
+        } else {
+          const handle = activeArtboardDrag.handle;
+          const orig = activeArtboardDrag.origArtboard;
+          let newX = orig.x;
+          let newY = orig.y;
+          let newW = orig.width;
+          let newH = orig.height;
+
+          if (handle.includes('e')) {
+            newW = Math.max(50, worldPos.x - orig.x);
+          }
+          if (handle.includes('s')) {
+            newH = Math.max(50, worldPos.y - orig.y);
+          }
+          if (handle.includes('w')) {
+            const right = orig.x + orig.width;
+            newX = Math.min(right - 50, worldPos.x);
+            newW = right - newX;
+          }
+          if (handle.includes('n')) {
+            const bottom = orig.y + orig.height;
+            newY = Math.min(bottom - 50, worldPos.y);
+            newH = bottom - newY;
+          }
+
+          onUpdateArtboard({
+            ...orig,
+            x: Math.round(newX),
+            y: Math.round(newY),
+            width: Math.round(newW),
+            height: Math.round(newH),
+          });
+        }
+        return;
+      }
+
+      // Hover feedback for artboard handles
+      const artboardBox: BoundingBox = {
+        minX: artboard.x,
+        minY: artboard.y,
+        maxX: artboard.x + artboard.width,
+        maxY: artboard.y + artboard.height,
+        width: artboard.width,
+        height: artboard.height,
+        centerX: artboard.x + artboard.width / 2,
+        centerY: artboard.y + artboard.height / 2,
+      };
+      const hit = hitTestBoundingBox(worldPos, artboardBox, transform.zoom);
+      if (hit) {
+        setHoverCursor(getTransformCursor(hit));
+      } else {
+        setHoverCursor(null);
+      }
+      return;
+    }
+
     // 4. Select Tool Transformations (Translating, Scaling, Rotating)
     if (
       currentTool === 'select' ||
@@ -749,6 +880,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleMouseUp = () => {
     setIsPanning(false);
 
+    if (activeArtboardDrag) {
+      setActiveArtboardDrag(null);
+    }
+
     if (currentTool === 'pen') {
       setIsDraggingPenHandle(false);
     }
@@ -778,6 +913,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (currentTool === 'eraser' || currentTool === 'scissors') return { cursor: 'crosshair' };
     if (currentTool === 'rotate') return { cursor: 'grab' };
     if (currentTool === 'scale') return { cursor: 'nwse-resize' };
+    if (currentTool === 'artboard') {
+      if (hoverCursor) return { cursor: hoverCursor };
+      return { cursor: 'default' };
+    }
     if (activeTransform?.type === 'rotate') {
       return {
         cursor: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpolyline points='21 3 21 8 16 8'/%3E%3C/svg%3E") 12 12, crosshair`,

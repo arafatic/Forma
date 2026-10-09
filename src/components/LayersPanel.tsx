@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   VectorElement,
   GroupElement,
@@ -20,27 +20,48 @@ import {
   X,
   Type,
   Image as ImageIcon,
+  Search,
+  Plus,
+  Trash2,
+  FolderPlus,
+  Scissors,
+  Check,
 } from 'lucide-react';
 import { getLayerDisplayName } from '../engine/layers';
 
-interface LayersPanelProps {
+export interface LayersPanelProps {
   elements: VectorElement[];
   selectedIds: string[];
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
   onSelectLayer: (id: string, isShift: boolean) => void;
   onToggleVisibility: (id: string) => void;
   onToggleLock: (id: string) => void;
   onRenameLayer: (id: string, newName: string) => void;
   onReorderLayers: (fromIndex: number, toIndex: number) => void;
-  onGroupSelected: () => void;
-  onUngroupSelected: () => void;
+  onGroupSelected?: () => void;
+  onUngroupSelected?: () => void;
+  onNewLayer?: () => void;
+  onCreateSublayer?: () => void;
+  onMakeClippingMask?: () => void;
+  onDeleteLayer?: (id?: string) => void;
 }
+
+const LAYER_ACCENT_COLORS = [
+  '#3b82f6', // Blue
+  '#ef4444', // Red
+  '#10b981', // Green
+  '#f59e0b', // Amber
+  '#8b5cf6', // Violet
+  '#ec4899', // Pink
+  '#06b6d4', // Cyan
+  '#f97316', // Orange
+];
 
 export const LayersPanel: React.FC<LayersPanelProps> = ({
   elements,
   selectedIds,
-  isOpen,
+  isOpen = true,
   onClose,
   onSelectLayer,
   onToggleVisibility,
@@ -49,7 +70,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   onReorderLayers,
   onGroupSelected,
   onUngroupSelected,
+  onNewLayer,
+  onCreateSublayer,
+  onMakeClippingMask,
+  onDeleteLayer,
 }) => {
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showSearch, setShowSearch] = useState<boolean>(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState<string>('');
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -84,29 +111,71 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     setEditingId(null);
   };
 
-  const getElementIcon = (type: VectorElement['type']) => {
-    switch (type) {
-      case 'group':
-        return <Folder className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
+  const getElementThumbnail = (el: VectorElement) => {
+    const fill = el.fill === 'none' ? 'transparent' : el.fill;
+    const stroke = el.stroke === 'none' ? 'transparent' : el.stroke;
+
+    switch (el.type) {
       case 'rectangle':
-        return <Square className="w-3.5 h-3.5 text-sky-400 shrink-0" />;
+        return (
+          <div
+            className="w-4 h-3.5 rounded-[2px] border border-white/20 shrink-0 shadow-inner flex items-center justify-center overflow-hidden"
+            style={{ backgroundColor: fill, borderColor: stroke !== 'transparent' ? stroke : undefined }}
+          />
+        );
       case 'ellipse':
-        return <Circle className="w-3.5 h-3.5 text-indigo-400 shrink-0" />;
+        return (
+          <div
+            className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0 shadow-inner overflow-hidden"
+            style={{ backgroundColor: fill, borderColor: stroke !== 'transparent' ? stroke : undefined }}
+          />
+        );
       case 'path':
-        return <PenTool className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
+        return (
+          <div className="w-4 h-3.5 rounded-[2px] bg-zinc-800 border border-white/10 flex items-center justify-center shrink-0">
+            <PenTool className="w-2.5 h-2.5 text-emerald-400" />
+          </div>
+        );
       case 'text':
-        return <Type className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
+        return (
+          <div className="w-4 h-3.5 rounded-[2px] bg-zinc-800 border border-white/10 flex items-center justify-center shrink-0">
+            <span className="text-[9px] font-bold text-purple-400">T</span>
+          </div>
+        );
       case 'image':
-        return <ImageIcon className="w-3.5 h-3.5 text-pink-400 shrink-0" />;
+        return (
+          <div className="w-4 h-3.5 rounded-[2px] bg-zinc-800 border border-white/10 flex items-center justify-center shrink-0">
+            <ImageIcon className="w-2.5 h-2.5 text-pink-400" />
+          </div>
+        );
+      case 'group':
+        return (
+          <div className="w-4 h-3.5 rounded-[2px] bg-zinc-800 border border-white/10 flex items-center justify-center shrink-0">
+            <Folder className="w-2.5 h-2.5 text-amber-400" />
+          </div>
+        );
+      default:
+        return <div className="w-3.5 h-3.5 rounded bg-zinc-700 shrink-0" />;
     }
   };
 
-  // Layers are rendered in reverse scene order:
-  // Top layer on screen is elements[elements.length - 1], so it appears first in the panel.
-  const reversedElements = [...elements].map((el, originalIdx) => ({
-    el,
-    originalIdx,
-  })).reverse();
+  // Layers in reverse scene order (top layer at top of tree)
+  const reversedElements = useMemo(() => {
+    return [...elements]
+      .map((el, originalIdx) => ({ el, originalIdx }))
+      .reverse();
+  }, [elements]);
+
+  // Filtered layers based on search query
+  const filteredElements = useMemo(() => {
+    if (!searchQuery.trim()) return reversedElements;
+    const q = searchQuery.toLowerCase();
+    return reversedElements.filter(({ el }) => {
+      const name = (el.name || getLayerDisplayName(el)).toLowerCase();
+      const type = el.type.toLowerCase();
+      return name.includes(q) || type.includes(q);
+    });
+  }, [reversedElements, searchQuery]);
 
   const handleDragStart = (e: React.DragEvent, originalIdx: number) => {
     setDraggedIndex(originalIdx);
@@ -135,66 +204,50 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
   };
 
   return (
-    <aside className="w-64 bg-[#18181b]/95 backdrop-blur border-r border-white/[0.08] flex flex-col h-full z-20 select-none overflow-hidden animate-in slide-in-from-left-4 duration-150">
-      {/* Panel Header */}
-      <div className="h-10 px-3 border-b border-white/[0.08] flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          <Layers className="w-4 h-4 text-sky-400" />
-          <span className="font-semibold text-zinc-200">Layers</span>
-          <span className="text-[10px] px-1.5 py-0.2 bg-zinc-800 text-zinc-400 rounded-full font-mono border border-white/5">
-            {elements.length}
-          </span>
-        </div>
-
-        {/* Quick layer actions */}
-        <div className="flex items-center gap-1">
-          {selectedIds.length > 1 && (
-            <button
-              onClick={onGroupSelected}
-              title="Group Selected (Cmd+G)"
-              className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
-            >
-              <Folder className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          {selectedIds.length === 1 &&
-            elements.find((el) => el.id === selectedIds[0])?.type === 'group' && (
+    <div className="flex flex-col h-full bg-[#161619] select-none text-xs">
+      {/* 1. TOP SEARCH BAR ("Search All") */}
+      {showSearch && (
+        <div className="px-2.5 py-2 border-b border-white/[0.06] bg-[#121214]/60">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-900 border border-white/10 text-zinc-300">
+            <Search className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+            <input
+              type="text"
+              placeholder="Search All Layers…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-transparent text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none"
+            />
+            {searchQuery && (
               <button
-                onClick={onUngroupSelected}
-                title="Ungroup (Cmd+Shift+G)"
-                className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
+                onClick={() => setSearchQuery('')}
+                className="text-zinc-500 hover:text-white"
               >
-                <Ungroup className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
               </button>
             )}
-
-          <button
-            onClick={onClose}
-            title="Collapse Layers Panel"
-            className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors ml-0.5"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Layer Tree List */}
-      <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
-        {elements.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 text-xs gap-2">
-            <Layers className="w-8 h-8 stroke-1 text-zinc-600" />
-            <p>No layers on canvas</p>
-            <span className="text-[10px] text-zinc-600">Draw with Pen, Rectangle, or Ellipse</span>
+      {/* 2. LAYER TREE LIST */}
+      <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5 custom-scrollbar">
+        {filteredElements.length === 0 ? (
+          <div className="h-48 flex flex-col items-center justify-center p-4 text-center text-zinc-500 text-xs gap-1.5">
+            <Layers className="w-7 h-7 stroke-1 text-zinc-600" />
+            <p>{searchQuery ? 'No matching layers' : 'No layers on canvas'}</p>
+            <span className="text-[10px] text-zinc-600">
+              {searchQuery ? 'Try another keyword' : 'Create shapes with Pen, Rectangle, or Type'}
+            </span>
           </div>
         ) : (
-          reversedElements.map(({ el, originalIdx }) => {
+          filteredElements.map(({ el, originalIdx }, displayIdx) => {
             const isSelected = selectedIds.includes(el.id);
             const isVisible = el.visible !== false;
             const isLocked = el.locked === true;
             const isGroup = el.type === 'group';
             const isExpanded = isGroup && expandedGroupIds.has(el.id);
             const isDragOver = dragOverIndex === originalIdx;
+            const accentColor = LAYER_ACCENT_COLORS[originalIdx % LAYER_ACCENT_COLORS.length];
 
             return (
               <div key={el.id} className="relative">
@@ -210,17 +263,63 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                   onDrop={(e) => handleDrop(e, originalIdx)}
                   onDragEnd={handleDragEnd}
                   onClick={(e) => onSelectLayer(el.id, e.shiftKey)}
-                  className={`group flex items-center justify-between px-2 py-1.5 rounded-lg text-xs cursor-pointer transition-colors ${
+                  className={`group flex items-center justify-between px-1.5 py-1 rounded-md text-xs cursor-pointer transition-colors ${
                     isSelected
-                      ? 'bg-sky-500/20 text-white border border-sky-500/40'
-                      : 'text-zinc-300 hover:bg-zinc-800/80 hover:text-white'
+                      ? 'bg-sky-500/20 text-white border border-sky-400/30'
+                      : 'text-zinc-300 hover:bg-zinc-800/80 hover:text-white border border-transparent'
                   } ${!isVisible ? 'opacity-40' : ''}`}
                 >
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                    {/* Drag handle grip */}
-                    <GripVertical className="w-3 h-3 text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-grab" />
+                    {/* Layer color accent bar */}
+                    <div
+                      className="w-1 h-4 rounded-full shrink-0"
+                      style={{ backgroundColor: accentColor }}
+                      title={`Layer Accent: ${accentColor}`}
+                    />
 
-                    {/* Group expand toggle */}
+                    {/* Eye Visibility slot */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleVisibility(el.id);
+                      }}
+                      title={isVisible ? 'Hide Layer' : 'Show Layer'}
+                      className={`p-0.5 rounded transition-colors ${
+                        isVisible
+                          ? 'text-zinc-400 hover:text-white'
+                          : 'text-zinc-600 hover:text-zinc-400'
+                      }`}
+                    >
+                      {isVisible ? (
+                        <Eye className="w-3.5 h-3.5" />
+                      ) : (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+
+                    {/* Lock slot */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleLock(el.id);
+                      }}
+                      title={isLocked ? 'Unlock Layer' : 'Lock Layer'}
+                      className={`p-0.5 rounded transition-colors ${
+                        isLocked
+                          ? 'text-amber-400'
+                          : 'text-zinc-600 opacity-0 group-hover:opacity-100 hover:text-zinc-300'
+                      }`}
+                    >
+                      {isLocked ? (
+                        <Lock className="w-3.5 h-3.5" />
+                      ) : (
+                        <Unlock className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+
+                    {/* Expand/Collapse Chevron (for groups) */}
                     {isGroup ? (
                       <button
                         onClick={(e) => toggleGroupExpand(el.id, e)}
@@ -233,13 +332,13 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         )}
                       </button>
                     ) : (
-                      <div className="w-1" />
+                      <div className="w-2" />
                     )}
 
-                    {/* Element Type Icon */}
-                    {getElementIcon(el.type)}
+                    {/* Thumbnail Preview */}
+                    {getElementThumbnail(el)}
 
-                    {/* Name or inline rename input */}
+                    {/* Layer Name or Inline Rename */}
                     {editingId === el.id ? (
                       <input
                         type="text"
@@ -252,62 +351,39 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                           if (e.key === 'Escape') setEditingId(null);
                         }}
                         onClick={(e) => e.stopPropagation()}
-                        className="flex-1 bg-zinc-900 border border-sky-500 text-white rounded px-1.5 py-0.5 text-xs font-medium focus:outline-none"
+                        className="flex-1 bg-zinc-900 border border-sky-400 text-white rounded px-1.5 py-0.5 text-xs font-medium focus:outline-none"
                       />
                     ) : (
                       <span
-                        onDoubleClick={(e) => handleStartRename(el.id, getLayerDisplayName(el), e)}
-                        title="Double click to rename"
-                        className="truncate text-xs font-medium flex-1 text-left select-none"
+                        onDoubleClick={(e) => handleStartRename(el.id, el.name || getLayerDisplayName(el), e)}
+                        title="Double-click to rename"
+                        className="truncate text-xs font-medium flex-1 text-left select-none ml-0.5"
                       >
-                        {getLayerDisplayName(el)}
+                        {el.name || getLayerDisplayName(el)}
                       </span>
                     )}
                   </div>
 
-                  {/* Inline controls: Visibility (Eye) & Lock */}
-                  <div className="flex items-center gap-1 shrink-0 ml-1.5">
-                    {/* Lock toggle button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleLock(el.id);
-                      }}
-                      title={isLocked ? 'Unlock layer' : 'Lock layer'}
-                      className={`p-1 rounded transition-colors ${
-                        isLocked
-                          ? 'text-amber-400 bg-amber-400/10'
-                          : 'text-zinc-500 hover:text-zinc-300 opacity-0 group-hover:opacity-100'
+                  {/* Target Selection Circle (Iconic Illustrator Target Button) */}
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectLayer(el.id, e.shiftKey);
+                    }}
+                    title={isSelected ? 'Targeted' : 'Click to Target'}
+                    className="p-1 shrink-0 ml-1.5 flex items-center justify-center cursor-pointer"
+                  >
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all ${
+                        isSelected
+                          ? 'border-sky-400 bg-sky-950/40'
+                          : 'border-zinc-600 group-hover:border-zinc-400'
                       }`}
                     >
-                      {isLocked ? (
-                        <Lock className="w-3 h-3" />
-                      ) : (
-                        <Unlock className="w-3 h-3" />
+                      {isSelected && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-sky-400" />
                       )}
-                    </button>
-
-                    {/* Visibility toggle button */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleVisibility(el.id);
-                      }}
-                      title={isVisible ? 'Hide layer' : 'Show layer'}
-                      className={`p-1 rounded transition-colors ${
-                        isVisible
-                          ? 'text-zinc-500 hover:text-zinc-200 opacity-0 group-hover:opacity-100'
-                          : 'text-zinc-500 hover:text-zinc-300'
-                      }`}
-                    >
-                      {isVisible ? (
-                        <Eye className="w-3 h-3" />
-                      ) : (
-                        <EyeOff className="w-3 h-3" />
-                      )}
-                    </button>
+                    </div>
                   </div>
                 </div>
 
@@ -328,8 +404,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                         }`}
                       >
                         <div className="flex items-center gap-1.5 min-w-0">
-                          {getElementIcon(child.type)}
-                          <span className="truncate">{getLayerDisplayName(child)}</span>
+                          {getElementThumbnail(child)}
+                          <span className="truncate">{child.name || getLayerDisplayName(child)}</span>
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -357,6 +433,74 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
           })
         )}
       </div>
-    </aside>
+
+      {/* 3. BOTTOM TOOLBAR FOOTER */}
+      <div className="h-9 px-2.5 border-t border-white/[0.08] bg-[#121214] flex items-center justify-between text-zinc-400">
+        {/* Layer count */}
+        <span className="text-[11px] font-mono text-zinc-400">
+          {elements.length} {elements.length === 1 ? 'Layer' : 'Layers'}
+        </span>
+
+        {/* Footer action icons */}
+        <div className="flex items-center gap-0.5">
+          {/* Toggle search */}
+          <button
+            onClick={() => setShowSearch(!showSearch)}
+            title="Toggle Search (Search All)"
+            className={`p-1 rounded hover:bg-zinc-800 transition-colors ${
+              showSearch ? 'text-sky-400' : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Make / Release Clipping Mask */}
+          {onMakeClippingMask && (
+            <button
+              onClick={onMakeClippingMask}
+              title="Make / Release Clipping Mask (Cmd+7)"
+              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+            >
+              <Scissors className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Create Sublayer (+) */}
+          {onCreateSublayer && (
+            <button
+              onClick={onCreateSublayer}
+              title="Create Sublayer / Group"
+              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* New Layer (+) */}
+          {onNewLayer && (
+            <button
+              onClick={onNewLayer}
+              title="Create New Layer"
+              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Delete Layer (Trash) */}
+          {onDeleteLayer && (
+            <button
+              onClick={() => onDeleteLayer()}
+              title="Delete Selected Layer"
+              className="p-1 rounded hover:bg-red-950 text-zinc-400 hover:text-red-400 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
+
+export default LayersPanel;

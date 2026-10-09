@@ -64,6 +64,9 @@ export interface RectElement extends BaseVectorElement {
   y: number;
   width: number;
   height: number;
+  rx?: number;
+  ry?: number;
+  cornerRadius?: number;
 }
 
 export interface EllipseElement extends BaseVectorElement {
@@ -131,14 +134,18 @@ export type ToolType =
   | 'line'
   // Draw Category
   | 'pen'
+  | 'anchor-point'
   | 'curvature'
   | 'brush'
+  | 'blob-brush'
   | 'pencil'
   | 'eraser'
   | 'scissors'
   // Modify Category
   | 'rotate'
+  | 'reflect'
   | 'scale'
+  | 'blend'
   | 'shape-builder'
   // Type Category
   | 'text'
@@ -146,6 +153,7 @@ export type ToolType =
   // Navigate Category
   | 'hand'
   | 'zoom'
+  | 'artboard'
   // Color Category
   | 'eyedropper'
   | 'gradient-tool';

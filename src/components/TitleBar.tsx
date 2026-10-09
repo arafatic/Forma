@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, Plus, ZoomIn, ZoomOut, RotateCcw, Layers } from 'lucide-react';
+import { Download, Plus, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { MenuBar, MenuBarProps } from './MenuBar';
 
 interface TitleBarProps {
@@ -10,8 +10,6 @@ interface TitleBarProps {
   onNewDocument: () => void;
   onExportSvg: (mode?: 'artboard' | 'design') => void;
   elementCount: number;
-  showLayers?: boolean;
-  onToggleLayers?: () => void;
   menuBarProps: MenuBarProps;
 }
 
@@ -23,8 +21,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onNewDocument,
   onExportSvg,
   elementCount,
-  showLayers = false,
-  onToggleLayers,
   menuBarProps,
 }) => {
   return (
@@ -60,22 +56,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
         {/* Quick action buttons */}
         <div className="flex items-center gap-1.5">
-          {onToggleLayers && (
-            <button
-              onClick={onToggleLayers}
-              type="button"
-              title="Toggle Layers Panel (Cmd+L)"
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-colors border cursor-pointer ${
-                showLayers
-                  ? 'bg-sky-500/20 text-sky-400 border-sky-500/40 shadow-sm'
-                  : 'text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 border-white/10'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5 text-sky-400" />
-              <span>Layers</span>
-            </button>
-          )}
-
           <button
             onClick={onNewDocument}
             type="button"
