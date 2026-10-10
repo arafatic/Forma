@@ -10,6 +10,7 @@ import {
   EllipseElement,
   TextElement,
   Artboard,
+  SelectedAnchorIndex,
 } from '../types/vector';
 import {
   snapTo45Degrees,
@@ -28,8 +29,26 @@ import {
   hitTestGradientHandles,
   measureTextBounds,
   BoundingBox,
-  HandleType,
+  scaleElementWithPivot,
 } from '../engine/transform';
+import {
+  calculateCollectiveBounds,
+  getHandleUnderCursor,
+  hitTestBoundingBoxArea,
+  getCursorForHandle,
+  drawTransformBoundingBox,
+  calculateResizedBounds,
+  getOppositeAnchor,
+  TransformBounds,
+  HandleType,
+  ROTATE_CURSOR,
+} from '../utils/transformHandles';
+import {
+  findHitAnchorAcrossElements,
+  calculateOppositeHandle,
+  getAnchorsInRect,
+  getAnchorPos,
+} from '../utils/bezierMath';
 
 interface CanvasProps {
   currentTool: ToolType;
@@ -53,15 +72,58 @@ interface CanvasProps {
 }
 
 export type ActiveTransform =
-  | { type: 'translate'; startMouse: Point; origElement: VectorElement }
-  | { type: 'scale'; handle: HandleType; originBox: BoundingBox; origElement: VectorElement }
-  | { type: 'rotate'; center: Point; startAngle: number; origElement: VectorElement }
-  | { type: 'gradient-start' | 'gradient-end'; origElement: VectorElement };
+  | {
+      type: 'translate';
+      startMouse: Point;
+      origElements: VectorElement[];
+      targetIds: string[];
+    }
+  | {
+      type: 'scale';
+      handle: HandleType;
+      initialBounds: TransformBounds;
+      initialMouse: Point;
+      fixedAnchor: Point;
+      origElements: VectorElement[];
+      targetIds: string[];
+    }
+  | {
+      type: 'rotate';
+      center: Point;
+      startAngle: number;
+      initialRotation: number;
+      origElements: VectorElement[];
+      targetIds: string[];
+    }
+  | { type: 'gradient-start' | 'gradient-end'; origElement: VectorElement }
+  | {
+      type: 'direct-anchor-drag';
+      startMouse: Point;
+      draggedAnchor: SelectedAnchorIndex;
+      initialSelectedAnchors: SelectedAnchorIndex[];
+      origElements: VectorElement[];
+    }
+  | {
+      type: 'direct-handle-drag';
+      startMouse: Point;
+      shapeId: string;
+      pointIndex: number;
+      handleType: 'handleIn' | 'handleOut';
+      origAnchor: AnchorPoint;
+      origElements: VectorElement[];
+    }
+  | {
+      type: 'direct-marquee';
+      startMouse: Point;
+      currentMouse: Point;
+      isShift: boolean;
+    };
 
 export const Canvas: React.FC<CanvasProps> = ({
   currentTool,
   elements,
   selectedId,
+  selectedIds = [],
   defaultFill,
   defaultStroke,
   defaultStrokeWidth,
@@ -106,6 +168,20 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [activeTransform, setActiveTransform] = useState<ActiveTransform | null>(null);
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
 
+  // Direct Selection State (Anchor & Handle Selection)
+  const [selectedAnchorIndices, setSelectedAnchorIndices] = useState<SelectedAnchorIndex[]>([]);
+  const selectedAnchorIndicesRef = useRef<SelectedAnchorIndex[]>([]);
+  selectedAnchorIndicesRef.current = selectedAnchorIndices;
+
+  // Synchronous refs for instantaneous modifier response during drag
+  const activeTransformRef = useRef<ActiveTransform | null>(null);
+  activeTransformRef.current = activeTransform;
+
+  const elementsRef = useRef<VectorElement[]>(elements);
+  elementsRef.current = elements;
+
+  const lastMousePosRef = useRef<Point | null>(null);
+
   // Pan state (Space+Drag or Middle Click)
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [panStart, setPanStart] = useState<Point>({ x: 0, y: 0 });
@@ -132,7 +208,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     setIsDraggingPenHandle(false);
   }, [activePenPath, elements, onElementsChange, onSelectElement]);
 
-  // Handle keyboard shortcuts (Escape, Enter to commit path, Space for panning, Escape/V to exit artboard)
+  // Handle keyboard shortcuts (Escape, Enter to commit path, Space for panning, Escape/V to exit artboard, Shift/Alt modifiers for drag)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) {
@@ -146,12 +222,140 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (currentTool === 'artboard' && (e.key === 'Escape' || e.key.toLowerCase() === 'v')) {
         onSelectTool?.('select');
       }
+
+      // Live update if Shift or Alt key toggled during active resize drag
+      if (
+        (e.key === 'Shift' || e.key === 'Alt') &&
+        activeTransformRef.current &&
+        activeTransformRef.current.type === 'scale' &&
+        lastMousePosRef.current
+      ) {
+        const trans = activeTransformRef.current;
+        const { scaleX, scaleY, pivot } = calculateResizedBounds(
+          trans.initialBounds,
+          trans.handle,
+          trans.initialMouse,
+          lastMousePosRef.current,
+          e.shiftKey,
+          e.altKey
+        );
+        const updated = elementsRef.current.map((el) => {
+          const orig = trans.origElements.find((o) => o.id === el.id);
+          if (!orig) return el;
+          return scaleElementWithPivot(orig, pivot, scaleX, scaleY);
+        });
+        onElementsChange(updated);
+      }
+
+      // Live update if Shift or Alt key toggled during active direct-handle drag
+      if (
+        (e.key === 'Shift' || e.key === 'Alt') &&
+        activeTransformRef.current &&
+        activeTransformRef.current.type === 'direct-handle-drag' &&
+        lastMousePosRef.current
+      ) {
+        const trans = activeTransformRef.current;
+        const { shapeId, pointIndex, handleType, origAnchor, origElements } = trans;
+        const anchorPos = getAnchorPos(origAnchor);
+        let handlePos = lastMousePosRef.current;
+        if (e.shiftKey) {
+          handlePos = snapTo45Degrees(anchorPos, handlePos);
+        }
+        const origOppHandle = handleType === 'handleIn' ? origAnchor.handleOut : origAnchor.handleIn;
+        const { oppositeHandle, pointType, isCorner } = calculateOppositeHandle(
+          anchorPos,
+          handlePos,
+          origOppHandle ?? null,
+          e.altKey,
+          origAnchor.pointType || (origAnchor.isCorner ? 'corner' : 'smooth')
+        );
+        const newHandleIn = handleType === 'handleIn' ? handlePos : oppositeHandle;
+        const newHandleOut = handleType === 'handleOut' ? handlePos : oppositeHandle;
+        const updated = elementsRef.current.map((el) => {
+          const orig = origElements.find((o) => o.id === el.id);
+          if (!orig || orig.id !== shapeId || orig.type !== 'path') return el;
+          const updatedPoints = [...orig.points];
+          updatedPoints[pointIndex] = {
+            ...origAnchor,
+            handleIn: newHandleIn,
+            handleOut: newHandleOut,
+            pointType,
+            isCorner,
+          };
+          return { ...orig, points: updatedPoints };
+        });
+        onElementsChange(updated);
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         setIsSpacePressed(false);
         setIsPanning(false);
+      }
+
+      // Live update if Shift or Alt key released during active resize drag
+      if (
+        (e.key === 'Shift' || e.key === 'Alt') &&
+        activeTransformRef.current &&
+        activeTransformRef.current.type === 'scale' &&
+        lastMousePosRef.current
+      ) {
+        const trans = activeTransformRef.current;
+        const { scaleX, scaleY, pivot } = calculateResizedBounds(
+          trans.initialBounds,
+          trans.handle,
+          trans.initialMouse,
+          lastMousePosRef.current,
+          e.shiftKey,
+          e.altKey
+        );
+        const updated = elementsRef.current.map((el) => {
+          const orig = trans.origElements.find((o) => o.id === el.id);
+          if (!orig) return el;
+          return scaleElementWithPivot(orig, pivot, scaleX, scaleY);
+        });
+        onElementsChange(updated);
+      }
+
+      // Live update if Shift or Alt key released during active direct-handle drag
+      if (
+        (e.key === 'Shift' || e.key === 'Alt') &&
+        activeTransformRef.current &&
+        activeTransformRef.current.type === 'direct-handle-drag' &&
+        lastMousePosRef.current
+      ) {
+        const trans = activeTransformRef.current;
+        const { shapeId, pointIndex, handleType, origAnchor, origElements } = trans;
+        const anchorPos = getAnchorPos(origAnchor);
+        let handlePos = lastMousePosRef.current;
+        if (e.shiftKey) {
+          handlePos = snapTo45Degrees(anchorPos, handlePos);
+        }
+        const origOppHandle = handleType === 'handleIn' ? origAnchor.handleOut : origAnchor.handleIn;
+        const { oppositeHandle, pointType, isCorner } = calculateOppositeHandle(
+          anchorPos,
+          handlePos,
+          origOppHandle ?? null,
+          e.altKey,
+          origAnchor.pointType || (origAnchor.isCorner ? 'corner' : 'smooth')
+        );
+        const newHandleIn = handleType === 'handleIn' ? handlePos : oppositeHandle;
+        const newHandleOut = handleType === 'handleOut' ? handlePos : oppositeHandle;
+        const updated = elementsRef.current.map((el) => {
+          const orig = origElements.find((o) => o.id === el.id);
+          if (!orig || orig.id !== shapeId || orig.type !== 'path') return el;
+          const updatedPoints = [...orig.points];
+          updatedPoints[pointIndex] = {
+            ...origAnchor,
+            handleIn: newHandleIn,
+            handleOut: newHandleOut,
+            pointType,
+            isCorner,
+          };
+          return { ...orig, points: updatedPoints };
+        });
+        onElementsChange(updated);
       }
     };
 
@@ -161,7 +365,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activePenPath, commitPenPath, currentTool, onSelectTool]);
+  }, [activePenPath, commitPenPath, currentTool, onSelectTool, onElementsChange]);
 
   // Main Render Loop tied to requestAnimationFrame
   useEffect(() => {
@@ -193,6 +397,12 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       // Merge active shape being drawn with elements for rendering
       const allElements = activeShape ? [...elements, activeShape] : elements;
+      const effectiveSelectedIds =
+        selectedIds && selectedIds.length > 0
+          ? selectedIds
+          : selectedId
+          ? [selectedId]
+          : [];
 
       renderCanvas({
         ctx,
@@ -202,10 +412,22 @@ export const Canvas: React.FC<CanvasProps> = ({
         zoom: transform.zoom,
         elements: allElements,
         selectedId,
+        selectedIds: effectiveSelectedIds,
+        currentTool,
         activePenPath,
         penMousePos,
         isHoveringClosePoint,
         selectedAnchorIndex: null,
+        selectedAnchorIndices,
+        marqueeRect:
+          activeTransform?.type === 'direct-marquee'
+            ? {
+                minX: Math.min(activeTransform.startMouse.x, activeTransform.currentMouse.x),
+                maxX: Math.max(activeTransform.startMouse.x, activeTransform.currentMouse.x),
+                minY: Math.min(activeTransform.startMouse.y, activeTransform.currentMouse.y),
+                maxY: Math.max(activeTransform.startMouse.y, activeTransform.currentMouse.y),
+              }
+            : null,
         showGrid,
         artboard,
         isArtboardTool: currentTool === 'artboard',
@@ -220,6 +442,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     elements,
     transform,
     selectedId,
+    selectedIds,
     activePenPath,
     penMousePos,
     isHoveringClosePoint,
@@ -227,6 +450,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     showGrid,
     artboard,
     currentTool,
+    selectedAnchorIndices,
+    activeTransform,
   ]);
 
   // Resize observer to ensure crisp canvas on window resize
@@ -367,9 +592,12 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       const newAnchor: AnchorPoint = {
+        x: anchorPos.x,
+        y: anchorPos.y,
         point: anchorPos,
         handleIn: null,
         handleOut: null,
+        pointType: e.altKey ? 'corner' : 'smooth',
         isCorner: e.altKey,
       };
 
@@ -512,21 +740,137 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     // -----------------------------------------------------------
-    // TOOL: SELECT, DIRECT SELECT, LASSO, ROTATE, SCALE, SHAPE BUILDER
+    // TOOL: DIRECT SELECTION TOOL (A)
+    // -----------------------------------------------------------
+    if (currentTool === 'direct-select' || (currentTool as string) === 'directSelection') {
+      // 1. Hit test anchor points & Bézier control handles across elements
+      const hitResult = findHitAnchorAcrossElements(
+        worldPos,
+        elements,
+        transform.zoom,
+        selectedAnchorIndices
+      );
+
+      if (hitResult) {
+        const { element, hit } = hitResult;
+
+        if (hit.handleType === 'handleIn' || hit.handleType === 'handleOut') {
+          // Dragging a Bézier control handle
+          const origAnchor = element.points[hit.pointIndex];
+          setActiveTransform({
+            type: 'direct-handle-drag',
+            startMouse: worldPos,
+            shapeId: element.id,
+            pointIndex: hit.pointIndex,
+            handleType: hit.handleType,
+            origAnchor: { ...origAnchor },
+            origElements: elements,
+          });
+          return;
+        }
+
+        if (hit.handleType === 'anchor') {
+          // Clicked an anchor point
+          let nextSelectedAnchors: SelectedAnchorIndex[];
+
+          if (e.shiftKey) {
+            // Shift + Click: toggle anchor selection
+            const exists = selectedAnchorIndices.some(
+              (s) => s.shapeId === element.id && s.pointIndex === hit.pointIndex
+            );
+            if (exists) {
+              nextSelectedAnchors = selectedAnchorIndices.filter(
+                (s) => !(s.shapeId === element.id && s.pointIndex === hit.pointIndex)
+              );
+            } else {
+              nextSelectedAnchors = [
+                ...selectedAnchorIndices,
+                { shapeId: element.id, pointIndex: hit.pointIndex, handleType: 'anchor' },
+              ];
+            }
+          } else {
+            // Regular click
+            const isAlreadySelected = selectedAnchorIndices.some(
+              (s) => s.shapeId === element.id && s.pointIndex === hit.pointIndex
+            );
+            if (isAlreadySelected) {
+              nextSelectedAnchors = selectedAnchorIndices;
+            } else {
+              nextSelectedAnchors = [
+                { shapeId: element.id, pointIndex: hit.pointIndex, handleType: 'anchor' },
+              ];
+            }
+          }
+
+          setSelectedAnchorIndices(nextSelectedAnchors);
+          onSelectElement(element.id, e.shiftKey);
+
+          setActiveTransform({
+            type: 'direct-anchor-drag',
+            startMouse: worldPos,
+            draggedAnchor: { shapeId: element.id, pointIndex: hit.pointIndex, handleType: 'anchor' },
+            initialSelectedAnchors: nextSelectedAnchors,
+            origElements: elements,
+          });
+          return;
+        }
+      }
+
+      // 2. Check if clicked inside an element body/stroke
+      let clickedPathId: string | null = null;
+      for (let i = elements.length - 1; i >= 0; i--) {
+        const el = elements[i];
+        if (isPointInsideElement(worldPos, el, transform.zoom)) {
+          clickedPathId = el.id;
+          break;
+        }
+      }
+
+      if (clickedPathId) {
+        onSelectElement(clickedPathId, e.shiftKey);
+        if (!e.shiftKey) {
+          setSelectedAnchorIndices([]);
+        }
+        return;
+      }
+
+      // 3. Clicked on empty canvas -> Marquee selection or deselect
+      if (!e.shiftKey) {
+        setSelectedAnchorIndices([]);
+        onSelectElement(null);
+      }
+      setActiveTransform({
+        type: 'direct-marquee',
+        startMouse: worldPos,
+        currentMouse: worldPos,
+        isShift: e.shiftKey,
+      });
+      return;
+    }
+
+    // -----------------------------------------------------------
+    // TOOL: SELECT, LASSO, ROTATE, SCALE, SHAPE BUILDER
     // -----------------------------------------------------------
     if (
       currentTool === 'select' ||
-      currentTool === 'direct-select' ||
+      (currentTool as string) === 'selection' ||
       currentTool === 'lasso' ||
       currentTool === 'rotate' ||
       currentTool === 'scale' ||
       currentTool === 'shape-builder' ||
       currentTool === 'gradient-tool'
     ) {
-      // 0. If selected element has gradient, test gradient handle hit
-      const selectedEl = elements.find((el) => el.id === selectedId);
-      if (selectedEl) {
-        if (selectedEl.gradient) {
+      const effectiveSelectedIds =
+        selectedIds && selectedIds.length > 0
+          ? selectedIds
+          : selectedId
+          ? [selectedId]
+          : [];
+
+      // 0. If single selected element has gradient, test gradient handle hit
+      if (effectiveSelectedIds.length === 1) {
+        const selectedEl = elements.find((el) => el.id === effectiveSelectedIds[0]);
+        if (selectedEl?.gradient) {
           const gradHit = hitTestGradientHandles(worldPos, selectedEl, transform.zoom);
           if (gradHit) {
             setActiveTransform({
@@ -536,38 +880,49 @@ export const Canvas: React.FC<CanvasProps> = ({
             return;
           }
         }
+      }
 
-        // 1. If an element is already selected, test its bounding box handles & rotation
-        const box = getElementBoundingBox(selectedEl);
-        const hit = hitTestBoundingBox(worldPos, box, transform.zoom);
+      // 1. If shapes are selected, test bounding box 8 handles, rotation zone, and body
+      if (effectiveSelectedIds.length > 0) {
+        const bounds = calculateCollectiveBounds(elements, effectiveSelectedIds);
+        if (bounds) {
+          const handleHit = getHandleUnderCursor(worldPos, bounds, transform.zoom);
 
-        if (hit) {
-          if (hit.type === 'handle') {
-            setActiveTransform({
-              type: 'scale',
-              handle: hit.handle,
-              originBox: box,
-              origElement: { ...selectedEl },
-            });
-            return;
-          }
-
-          if (hit.type === 'rotate') {
-            const startAngle = Math.atan2(worldPos.y - box.centerY, worldPos.x - box.centerX);
+          if (handleHit === 'rotate') {
+            const center: Point = { x: bounds.centerX, y: bounds.centerY };
+            const startAngle = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
             setActiveTransform({
               type: 'rotate',
-              center: { x: box.centerX, y: box.centerY },
+              center,
               startAngle,
-              origElement: { ...selectedEl },
+              initialRotation: bounds.rotation || 0,
+              origElements: elements.filter((el) => effectiveSelectedIds.includes(el.id)),
+              targetIds: effectiveSelectedIds,
+            });
+            return;
+          } else if (handleHit) {
+            // Resize handle: nw, n, ne, e, se, s, sw, w
+            const fixedAnchor = getOppositeAnchor(bounds, handleHit);
+            setActiveTransform({
+              type: 'scale',
+              handle: handleHit,
+              initialBounds: bounds,
+              initialMouse: worldPos,
+              fixedAnchor,
+              origElements: elements.filter((el) => effectiveSelectedIds.includes(el.id)),
+              targetIds: effectiveSelectedIds,
             });
             return;
           }
 
-          if (hit.type === 'body') {
+          // Check click inside bounding box body
+          const bodyHit = hitTestBoundingBoxArea(worldPos, bounds, transform.zoom);
+          if (bodyHit === 'body') {
             setActiveTransform({
               type: 'translate',
               startMouse: worldPos,
-              origElement: { ...selectedEl },
+              origElements: elements.filter((el) => effectiveSelectedIds.includes(el.id)),
+              targetIds: effectiveSelectedIds,
             });
             return;
           }
@@ -588,11 +943,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       onSelectElement(foundId, e.shiftKey);
 
       if (foundId) {
-        const hitEl = elements.find((el) => el.id === foundId)!;
+        const newSelectedIds = e.shiftKey
+          ? (effectiveSelectedIds.includes(foundId) ? effectiveSelectedIds : [...effectiveSelectedIds, foundId])
+          : [foundId];
+
         setActiveTransform({
           type: 'translate',
           startMouse: worldPos,
-          origElement: { ...hitEl },
+          origElements: elements.filter((el) => newSelectedIds.includes(el.id)),
+          targetIds: newSelectedIds,
         });
       }
     }
@@ -636,6 +995,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
     const worldPos = screenToWorld(screenX, screenY);
+    lastMousePosRef.current = worldPos;
 
     // 1. Panning canvas
     if (isPanning) {
@@ -792,10 +1152,139 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
+    // -----------------------------------------------------------
+    // DIRECT SELECTION TOOL: Transformations (Anchor Drag, Handle Drag, Marquee) & Hover
+    // -----------------------------------------------------------
+    if (activeTransform?.type === 'direct-anchor-drag') {
+      const dx = worldPos.x - activeTransform.startMouse.x;
+      const dy = worldPos.y - activeTransform.startMouse.y;
+      const selectedSet = new Set(
+        activeTransform.initialSelectedAnchors.map((s) => `${s.shapeId}_${s.pointIndex}`)
+      );
+
+      const updated = elements.map((el) => {
+        const orig = activeTransform.origElements.find((o) => o.id === el.id);
+        if (!orig || orig.type !== 'path') return el;
+
+        const updatedPoints = orig.points.map((pt, idx) => {
+          if (!selectedSet.has(`${orig.id}_${idx}`)) return pt;
+
+          const origX = pt.x ?? pt.point.x;
+          const origY = pt.y ?? pt.point.y;
+          const nx = origX + dx;
+          const ny = origY + dy;
+
+          return {
+            ...pt,
+            x: nx,
+            y: ny,
+            point: { x: nx, y: ny },
+            handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : null,
+            handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : null,
+          };
+        });
+
+        return {
+          ...orig,
+          points: updatedPoints,
+        };
+      });
+
+      onElementsChange(updated);
+      return;
+    }
+
+    if (activeTransform?.type === 'direct-handle-drag') {
+      const { shapeId, pointIndex, handleType, origAnchor, origElements } = activeTransform;
+      const anchorPos = getAnchorPos(origAnchor);
+      let handlePos = worldPos;
+
+      if (e.shiftKey) {
+        handlePos = snapTo45Degrees(anchorPos, handlePos);
+      }
+
+      const origOppHandle = handleType === 'handleIn' ? origAnchor.handleOut : origAnchor.handleIn;
+      const { oppositeHandle, pointType, isCorner } = calculateOppositeHandle(
+        anchorPos,
+        handlePos,
+        origOppHandle ?? null,
+        e.altKey,
+        origAnchor.pointType || (origAnchor.isCorner ? 'corner' : 'smooth')
+      );
+
+      const newHandleIn = handleType === 'handleIn' ? handlePos : oppositeHandle;
+      const newHandleOut = handleType === 'handleOut' ? handlePos : oppositeHandle;
+
+      const updated = elements.map((el) => {
+        const orig = origElements.find((o) => o.id === el.id);
+        if (!orig || orig.id !== shapeId || orig.type !== 'path') return el;
+
+        const updatedPoints = [...orig.points];
+        updatedPoints[pointIndex] = {
+          ...origAnchor,
+          handleIn: newHandleIn,
+          handleOut: newHandleOut,
+          pointType,
+          isCorner,
+        };
+
+        return {
+          ...orig,
+          points: updatedPoints,
+        };
+      });
+
+      onElementsChange(updated);
+      return;
+    }
+
+    if (activeTransform?.type === 'direct-marquee') {
+      const rect = {
+        minX: Math.min(activeTransform.startMouse.x, worldPos.x),
+        maxX: Math.max(activeTransform.startMouse.x, worldPos.x),
+        minY: Math.min(activeTransform.startMouse.y, worldPos.y),
+        maxY: Math.max(activeTransform.startMouse.y, worldPos.y),
+      };
+
+      const foundAnchors = getAnchorsInRect(rect, elements);
+      const combined = activeTransform.isShift
+        ? [
+            ...selectedAnchorIndices.filter(
+              (prev) => !foundAnchors.some((f) => f.shapeId === prev.shapeId && f.pointIndex === prev.pointIndex)
+            ),
+            ...foundAnchors,
+          ]
+        : foundAnchors;
+
+      setSelectedAnchorIndices(combined);
+      setActiveTransform({
+        ...activeTransform,
+        currentMouse: worldPos,
+      });
+
+      const uniqueShapeIds = Array.from(new Set(combined.map((s) => s.shapeId)));
+      if (uniqueShapeIds.length > 0) {
+        onSelectElement(uniqueShapeIds[0], false);
+      }
+      return;
+    }
+
+    if (currentTool === 'direct-select' || (currentTool as string) === 'directSelection') {
+      if (!activeTransform) {
+        const hit = findHitAnchorAcrossElements(worldPos, elements, transform.zoom, selectedAnchorIndices);
+        if (hit) {
+          setHoverCursor(hit.hit.handleType === 'anchor' ? 'pointer' : 'crosshair');
+        } else {
+          setHoverCursor(null);
+        }
+      }
+      return;
+    }
+
     // 4. Select Tool Transformations (Translating, Scaling, Rotating)
     if (
       currentTool === 'select' ||
-      currentTool === 'direct-select' ||
+      (currentTool as string) === 'selection' ||
       currentTool === 'lasso' ||
       currentTool === 'rotate' ||
       currentTool === 'scale' ||
@@ -806,35 +1295,52 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (activeTransform.type === 'translate') {
           const dx = worldPos.x - activeTransform.startMouse.x;
           const dy = worldPos.y - activeTransform.startMouse.y;
-          const orig = activeTransform.origElement;
-          const translated = translateElement(orig, dx, dy);
-          const updated = elements.map((el) => (el.id === orig.id ? translated : el));
+          const updated = elements.map((el) => {
+            const orig = activeTransform.origElements.find((o) => o.id === el.id);
+            if (!orig) return el;
+            return translateElement(orig, dx, dy);
+          });
           onElementsChange(updated);
         } else if (activeTransform.type === 'scale') {
-          const scaled = scaleElement(
-            activeTransform.origElement,
+          // Resize with Shift (constrain aspect) & Alt (scale from center)
+          const { scaleX, scaleY, pivot } = calculateResizedBounds(
+            activeTransform.initialBounds,
             activeTransform.handle,
-            activeTransform.originBox,
+            activeTransform.initialMouse,
             worldPos,
-            e.shiftKey
+            e.shiftKey,
+            e.altKey
           );
-          const updated = elements.map((el) => (el.id === scaled.id ? scaled : el));
+          const updated = elements.map((el) => {
+            const orig = activeTransform.origElements.find((o) => o.id === el.id);
+            if (!orig) return el;
+            return scaleElementWithPivot(orig, pivot, scaleX, scaleY);
+          });
           onElementsChange(updated);
         } else if (activeTransform.type === 'rotate') {
           const currentAngle = Math.atan2(
             worldPos.y - activeTransform.center.y,
             worldPos.x - activeTransform.center.x
           );
-          const deltaAngle = currentAngle - activeTransform.startAngle;
-          const rotated = rotateElement(
-            activeTransform.origElement,
-            activeTransform.center,
-            deltaAngle,
-            e.shiftKey
-          );
-          const updated = elements.map((el) => (el.id === rotated.id ? rotated : el));
+          let deltaAngle = currentAngle - activeTransform.startAngle;
+          if (e.shiftKey) {
+            const step = Math.PI / 12; // Snap to 15-degree steps
+            deltaAngle = Math.round(deltaAngle / step) * step;
+          }
+          const updated = elements.map((el) => {
+            const orig = activeTransform.origElements.find((o) => o.id === el.id);
+            if (!orig) return el;
+            const rotated = rotateElement(orig, activeTransform.center, deltaAngle, false);
+            return {
+              ...rotated,
+              rotation: ((orig.rotation || 0) + deltaAngle) % (Math.PI * 2),
+            };
+          });
           onElementsChange(updated);
-        } else if (activeTransform.type === 'gradient-start' || activeTransform.type === 'gradient-end') {
+        } else if (
+          activeTransform.type === 'gradient-start' ||
+          activeTransform.type === 'gradient-end'
+        ) {
           const orig = activeTransform.origElement;
           if (orig.gradient) {
             const box = getElementBoundingBox(orig);
@@ -859,21 +1365,42 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       // Hover cursor feedback when not actively dragging
-      const selectedEl = elements.find((el) => el.id === selectedId);
-      if (selectedEl) {
-        if (selectedEl.gradient) {
-          const gradHit = hitTestGradientHandles(worldPos, selectedEl, transform.zoom);
-          if (gradHit) {
-            setHoverCursor('crosshair');
+      const effectiveSelectedIds =
+        selectedIds && selectedIds.length > 0
+          ? selectedIds
+          : selectedId
+          ? [selectedId]
+          : [];
+
+      if (effectiveSelectedIds.length > 0) {
+        if (effectiveSelectedIds.length === 1) {
+          const singleEl = elements.find((el) => el.id === effectiveSelectedIds[0]);
+          if (singleEl?.gradient) {
+            const gradHit = hitTestGradientHandles(worldPos, singleEl, transform.zoom);
+            if (gradHit) {
+              setHoverCursor('crosshair');
+              return;
+            }
+          }
+        }
+
+        const bounds = calculateCollectiveBounds(elements, effectiveSelectedIds);
+        if (bounds) {
+          const handleHit = getHandleUnderCursor(worldPos, bounds, transform.zoom);
+          if (handleHit) {
+            setHoverCursor(getCursorForHandle(handleHit, bounds.rotation));
+            return;
+          }
+
+          const bodyHit = hitTestBoundingBoxArea(worldPos, bounds, transform.zoom);
+          if (bodyHit === 'body') {
+            setHoverCursor('move');
             return;
           }
         }
-        const box = getElementBoundingBox(selectedEl);
-        const hit = hitTestBoundingBox(worldPos, box, transform.zoom);
-        setHoverCursor(getTransformCursor(hit));
-      } else {
-        setHoverCursor(null);
       }
+
+      setHoverCursor(null);
     }
   };
 
@@ -918,12 +1445,20 @@ export const Canvas: React.FC<CanvasProps> = ({
       return { cursor: 'default' };
     }
     if (activeTransform?.type === 'rotate') {
-      return {
-        cursor: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpolyline points='21 3 21 8 16 8'/%3E%3C/svg%3E") 12 12, crosshair`,
-      };
+      return { cursor: ROTATE_CURSOR };
+    }
+    if (activeTransform?.type === 'scale') {
+      return { cursor: getCursorForHandle(activeTransform.handle) };
     }
     if (activeTransform?.type === 'translate') return { cursor: 'move' };
+    if (activeTransform?.type === 'direct-anchor-drag') return { cursor: 'pointer' };
+    if (activeTransform?.type === 'direct-handle-drag') return { cursor: 'crosshair' };
+    if (activeTransform?.type === 'direct-marquee') return { cursor: 'crosshair' };
     if (hoverCursor) return { cursor: hoverCursor };
+
+    if (currentTool === 'direct-select' || (currentTool as string) === 'directSelection') {
+      return { cursor: 'default' };
+    }
 
     if (
       currentTool === 'pen' ||

@@ -275,12 +275,18 @@ export function translateElement(el: VectorElement, dx: number, dy: number): Vec
   if (el.type === 'path') {
     return {
       ...el,
-      points: el.points.map((pt) => ({
-        ...pt,
-        point: { x: pt.point.x + dx, y: pt.point.y + dy },
-        handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : null,
-        handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : null,
-      })),
+      points: el.points.map((pt) => {
+        const nx = (pt.x ?? pt.point.x) + dx;
+        const ny = (pt.y ?? pt.point.y) + dy;
+        return {
+          ...pt,
+          x: nx,
+          y: ny,
+          point: { x: nx, y: ny },
+          handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : null,
+          handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : null,
+        };
+      }),
     };
   }
   if (el.type === 'text') {
@@ -301,7 +307,7 @@ export function translateElement(el: VectorElement, dx: number, dy: number): Vec
 /**
  * Helper to scale a single element relative to a fixed pivot point
  */
-function scaleElementWithPivot(
+export function scaleElementWithPivot(
   el: VectorElement,
   pivot: Point,
   sx: number,
@@ -337,25 +343,30 @@ function scaleElementWithPivot(
   }
 
   if (el.type === 'path') {
-    const transformedPoints = el.points.map((pt) => ({
-      ...pt,
-      point: {
-        x: pivot.x + (pt.point.x - pivot.x) * sx,
-        y: pivot.y + (pt.point.y - pivot.y) * sy,
-      },
-      handleIn: pt.handleIn
-        ? {
-            x: pivot.x + (pt.handleIn.x - pivot.x) * sx,
-            y: pivot.y + (pt.handleIn.y - pivot.y) * sy,
-          }
-        : null,
-      handleOut: pt.handleOut
-        ? {
-            x: pivot.x + (pt.handleOut.x - pivot.x) * sx,
-            y: pivot.y + (pt.handleOut.y - pivot.y) * sy,
-          }
-        : null,
-    }));
+    const transformedPoints = el.points.map((pt) => {
+      const origX = pt.x ?? pt.point.x;
+      const origY = pt.y ?? pt.point.y;
+      const nx = pivot.x + (origX - pivot.x) * sx;
+      const ny = pivot.y + (origY - pivot.y) * sy;
+      return {
+        ...pt,
+        x: nx,
+        y: ny,
+        point: { x: nx, y: ny },
+        handleIn: pt.handleIn
+          ? {
+              x: pivot.x + (pt.handleIn.x - pivot.x) * sx,
+              y: pivot.y + (pt.handleIn.y - pivot.y) * sy,
+            }
+          : null,
+        handleOut: pt.handleOut
+          ? {
+              x: pivot.x + (pt.handleOut.x - pivot.x) * sx,
+              y: pivot.y + (pt.handleOut.y - pivot.y) * sy,
+            }
+          : null,
+      };
+    });
 
     return {
       ...el,
@@ -464,10 +475,10 @@ export function convertToPath(el: VectorElement): PathElement {
 
   if (el.type === 'rectangle') {
     const pts: AnchorPoint[] = [
-      { point: { x: el.x, y: el.y }, handleIn: null, handleOut: null },
-      { point: { x: el.x + el.width, y: el.y }, handleIn: null, handleOut: null },
-      { point: { x: el.x + el.width, y: el.y + el.height }, handleIn: null, handleOut: null },
-      { point: { x: el.x, y: el.y + el.height }, handleIn: null, handleOut: null },
+      { x: el.x, y: el.y, point: { x: el.x, y: el.y }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: el.x + el.width, y: el.y, point: { x: el.x + el.width, y: el.y }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: el.x + el.width, y: el.y + el.height, point: { x: el.x + el.width, y: el.y + el.height }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: el.x, y: el.y + el.height, point: { x: el.x, y: el.y + el.height }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
     ];
     return {
       id: el.id,
@@ -491,24 +502,40 @@ export function convertToPath(el: VectorElement): PathElement {
 
     const pts: AnchorPoint[] = [
       {
+        x: el.cx,
+        y: el.cy - el.ry,
         point: { x: el.cx, y: el.cy - el.ry },
         handleIn: { x: el.cx - ox, y: el.cy - el.ry },
         handleOut: { x: el.cx + ox, y: el.cy - el.ry },
+        pointType: 'smooth',
+        isCorner: false,
       },
       {
+        x: el.cx + el.rx,
+        y: el.cy,
         point: { x: el.cx + el.rx, y: el.cy },
         handleIn: { x: el.cx + el.rx, y: el.cy - oy },
         handleOut: { x: el.cx + el.rx, y: el.cy + oy },
+        pointType: 'smooth',
+        isCorner: false,
       },
       {
+        x: el.cx,
+        y: el.cy + el.ry,
         point: { x: el.cx, y: el.cy + el.ry },
         handleIn: { x: el.cx + ox, y: el.cy + el.ry },
         handleOut: { x: el.cx - ox, y: el.cy + el.ry },
+        pointType: 'smooth',
+        isCorner: false,
       },
       {
+        x: el.cx - el.rx,
+        y: el.cy,
         point: { x: el.cx - el.rx, y: el.cy },
         handleIn: { x: el.cx - el.rx, y: el.cy + oy },
         handleOut: { x: el.cx - el.rx, y: el.cy - oy },
+        pointType: 'smooth',
+        isCorner: false,
       },
     ];
 
@@ -535,10 +562,10 @@ export function convertToPath(el: VectorElement): PathElement {
   if (el.type === 'text' || el.type === 'image') {
     const box = getElementBoundingBox(el);
     const pts: AnchorPoint[] = [
-      { point: { x: box.minX, y: box.minY }, handleIn: null, handleOut: null },
-      { point: { x: box.maxX, y: box.minY }, handleIn: null, handleOut: null },
-      { point: { x: box.maxX, y: box.maxY }, handleIn: null, handleOut: null },
-      { point: { x: box.minX, y: box.maxY }, handleIn: null, handleOut: null },
+      { x: box.minX, y: box.minY, point: { x: box.minX, y: box.minY }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: box.maxX, y: box.minY, point: { x: box.maxX, y: box.minY }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: box.maxX, y: box.maxY, point: { x: box.maxX, y: box.maxY }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
+      { x: box.minX, y: box.maxY, point: { x: box.minX, y: box.maxY }, handleIn: null, handleOut: null, pointType: 'corner', isCorner: true },
     ];
     return {
       id: el.id,
@@ -604,12 +631,18 @@ export function rotateElement(
 
   const path = convertToPath(original);
 
-  const rotatedPoints = path.points.map((pt) => ({
-    ...pt,
-    point: rotatePoint(pt.point),
-    handleIn: pt.handleIn ? rotatePoint(pt.handleIn) : null,
-    handleOut: pt.handleOut ? rotatePoint(pt.handleOut) : null,
-  }));
+  const rotatedPoints = path.points.map((pt) => {
+    const origPos = pt.point || { x: pt.x, y: pt.y };
+    const rot = rotatePoint(origPos);
+    return {
+      ...pt,
+      x: rot.x,
+      y: rot.y,
+      point: rot,
+      handleIn: pt.handleIn ? rotatePoint(pt.handleIn) : null,
+      handleOut: pt.handleOut ? rotatePoint(pt.handleOut) : null,
+    };
+  });
 
   return {
     ...path,

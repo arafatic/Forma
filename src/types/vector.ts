@@ -3,12 +3,23 @@ export interface Point {
   y: number;
 }
 
+export type AnchorPointType = 'corner' | 'smooth';
+
 export interface AnchorPoint {
+  x: number;
+  y: number;
   point: Point;
-  handleIn: Point | null;
-  handleOut: Point | null;
+  handleIn?: Point | null;
+  handleOut?: Point | null;
+  pointType?: AnchorPointType;
   // If true, handles are decoupled (not kept on a straight line)
   isCorner?: boolean;
+}
+
+export interface SelectedAnchorIndex {
+  shapeId: string;
+  pointIndex: number;
+  handleType?: 'anchor' | 'handleIn' | 'handleOut';
 }
 
 export type ElementType = 'path' | 'rectangle' | 'ellipse' | 'group' | 'text' | 'image';
@@ -50,6 +61,7 @@ export interface BaseVectorElement {
   visible?: boolean;
   locked?: boolean;
   selected?: boolean;
+  rotation?: number;
 }
 
 export interface PathElement extends BaseVectorElement {
@@ -123,7 +135,9 @@ export type VectorElement =
 export type ToolType =
   // Select Category
   | 'select'
+  | 'selection'
   | 'direct-select'
+  | 'directSelection'
   | 'lasso'
   // Shapes Category
   | 'rectangle'

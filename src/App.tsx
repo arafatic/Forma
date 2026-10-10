@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { TitleBar } from './components/TitleBar';
+import { TopBar } from './components/TopBar';
 import { Toolbar } from './components/Toolbar';
 import { Canvas } from './components/Canvas';
 import { RightSidebar, RightDockTab } from './components/RightSidebar';
@@ -60,19 +60,28 @@ const INITIAL_ELEMENTS: VectorElement[] = [
     type: 'path',
     points: [
       {
+        x: -140,
+        y: 50,
         point: { x: -140, y: 50 },
         handleIn: null,
         handleOut: { x: -90, y: -70 },
+        pointType: 'smooth',
       },
       {
+        x: 0,
+        y: -30,
         point: { x: 0, y: -30 },
         handleIn: { x: -60, y: -70 },
         handleOut: { x: 60, y: 10 },
+        pointType: 'smooth',
       },
       {
+        x: 140,
+        y: 50,
         point: { x: 140, y: 50 },
         handleIn: { x: 90, y: 100 },
         handleOut: null,
+        pointType: 'smooth',
       },
     ],
     closed: false,
@@ -461,12 +470,18 @@ export const App: React.FC = () => {
         ...target,
         id: newId,
         name: `${target.name || 'Path'} copy`,
-        points: target.points.map((pt) => ({
-          ...pt,
-          point: { x: pt.point.x + offset, y: pt.point.y + offset },
-          handleIn: pt.handleIn ? { x: pt.handleIn.x + offset, y: pt.handleIn.y + offset } : null,
-          handleOut: pt.handleOut ? { x: pt.handleOut.x + offset, y: pt.handleOut.y + offset } : null,
-        })),
+        points: target.points.map((pt) => {
+          const nx = (pt.x ?? pt.point.x) + offset;
+          const ny = (pt.y ?? pt.point.y) + offset;
+          return {
+            ...pt,
+            x: nx,
+            y: ny,
+            point: { x: nx, y: ny },
+            handleIn: pt.handleIn ? { x: pt.handleIn.x + offset, y: pt.handleIn.y + offset } : null,
+            handleOut: pt.handleOut ? { x: pt.handleOut.x + offset, y: pt.handleOut.y + offset } : null,
+          };
+        }),
       };
     } else {
       // Group copy
@@ -495,12 +510,18 @@ export const App: React.FC = () => {
         } else if (el.type === 'path') {
           return {
             ...el,
-            points: el.points.map((pt) => ({
-              ...pt,
-              point: { x: pt.point.x + dx, y: pt.point.y + dy },
-              handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : null,
-              handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : null,
-            })),
+            points: el.points.map((pt) => {
+              const nx = (pt.x ?? pt.point.x) + dx;
+              const ny = (pt.y ?? pt.point.y) + dy;
+              return {
+                ...pt,
+                x: nx,
+                y: ny,
+                point: { x: nx, y: ny },
+                handleIn: pt.handleIn ? { x: pt.handleIn.x + dx, y: pt.handleIn.y + dy } : null,
+                handleOut: pt.handleOut ? { x: pt.handleOut.x + dx, y: pt.handleOut.y + dy } : null,
+              };
+            }),
           };
         }
         return el;
@@ -847,12 +868,16 @@ export const App: React.FC = () => {
         if (el.type === 'path') {
           return {
             ...el,
-            points: el.points.map((p) => ({
-              ...p,
-              point: {
-                x: axis === 'horizontal' ? 2 * b.centerX - p.point.x : p.point.x,
-                y: axis === 'vertical' ? 2 * b.centerY - p.point.y : p.point.y,
-              },
+            points: el.points.map((p) => {
+              const curX = p.x ?? p.point.x;
+              const curY = p.y ?? p.point.y;
+              const nx = axis === 'horizontal' ? 2 * b.centerX - curX : curX;
+              const ny = axis === 'vertical' ? 2 * b.centerY - curY : curY;
+              return {
+                ...p,
+                x: nx,
+                y: ny,
+                point: { x: nx, y: ny },
               handleIn: p.handleIn
                 ? {
                     x: axis === 'horizontal' ? -p.handleIn.x : p.handleIn.x,
@@ -865,8 +890,9 @@ export const App: React.FC = () => {
                     y: axis === 'vertical' ? -p.handleOut.y : p.handleOut.y,
                   }
                 : null,
-            })),
-          };
+            };
+          }),
+        };
         }
         return el;
       });
@@ -1208,8 +1234,8 @@ export const App: React.FC = () => {
         className="hidden"
       />
 
-      {/* Top Bar with macOS drag region, MenuBar dropdowns, zoom indicator */}
-      <TitleBar
+      {/* Top Bar with macOS drag region, command search, workspace selector, and Illustrator-style Document Tab Bar */}
+      <TopBar
         zoom={transform.zoom}
         onResetZoom={handleResetZoom}
         onZoomIn={handleZoomIn}
@@ -1217,90 +1243,11 @@ export const App: React.FC = () => {
         onNewDocument={handleNewDocument}
         onExportSvg={handleExportSvg}
         elementCount={elements.length}
-        menuBarProps={{
-          onAbout: () => setShowAboutModal(true),
-          onPreferences: () => setShowShortcutsModal(true),
-          onQuit: () => showToast('Forma — Vector Design Studio'),
-          onNew: handleNewDocument,
-          onOpenSvg: handleOpenSvg,
-          onPlaceAsset: handlePlaceAsset,
-          onSave: () => handleExportSvg('artboard'),
-          onSaveAs: () => handleExportSvg('design'),
-          onExportSvg: handleExportSvg,
-          onExportPng: handleExportPng,
-          onDocumentSetup: handleNewDocument,
-          onUndo: handleUndo,
-          canUndo: historyIndex > 0,
-          onRedo: handleRedo,
-          canRedo: historyIndex < history.length - 1,
-          onCut: handleCut,
-          onCopy: handleCopy,
-          onPaste: handlePaste,
-          onPasteInFront: handlePasteInFront,
-          onPasteInBack: handlePasteInBack,
-          onPasteInPlace: handlePasteInPlace,
-          hasClipboard: clipboard.length > 0,
-          onDuplicate: handleDuplicate,
-          onDelete: handleDeleteSelected,
-          hasSelection: selectedIds.length > 0,
-          onTransformMove: handleTransformMove,
-          onTransformRotate: handleTransformRotate,
-          onTransformScale: handleTransformScale,
-          onTransformReflect: handleTransformReflect,
-          onGroup: handleGroup,
-          onUngroup: handleUngroup,
-          onBringForward: handleBringForward,
-          onBringToFront: handleBringToFront,
-          onSendBackward: handleSendBackward,
-          onSendToBack: handleSendToBack,
-          onLock: handleLockSelection,
-          onUnlockAll: handleUnlockAll,
-          onHide: handleHideSelection,
-          onShowAll: handleShowAll,
-          onMakeClippingMask: () => showToast('Make Clipping Mask (⌘7)'),
-          onReleaseClippingMask: () => showToast('Release Clipping Mask (⌥⌘7)'),
-          onMakeCompoundPath: () => showToast('Make Compound Path (⌘8)'),
-          onReleaseCompoundPath: () => showToast('Release Compound Path (⌥⌘8)'),
-          canPathfinder: selectedIds.length >= 2,
-          onPathfinderUnion: () => handleApplyPathfinder('unite'),
-          onPathfinderSubtract: () => handleApplyPathfinder('subtract'),
-          onPathfinderIntersect: () => handleApplyPathfinder('intersect'),
-          onPathfinderExclude: () => handleApplyPathfinder('exclude'),
-          onToggleBold: handleToggleBold,
-          onToggleItalic: handleToggleItalic,
-          onChangeFontSize: (size) => handleChangeProperties({ fontSize: size }),
-          onChangeFontFamily: (family) => handleChangeProperties({ fontFamily: family }),
-          onCreateOutlines: () => showToast('Converted to Outlines'),
-          isTextSelected: selectedElement?.type === 'text',
-          onSelectAll: handleSelectAll,
-          onDeselectAll: handleDeselectAll,
-          onSelectInverse: handleSelectInverse,
-          onSelectSameAppearance: () => handleSelectSame('appearance'),
-          onSelectSameFill: () => handleSelectSame('fill'),
-          onSelectSameStroke: () => handleSelectSame('stroke'),
-          outlineMode: outlineMode,
-          onToggleOutlineMode: handleToggleOutlineMode,
-          onZoomIn: handleZoomIn,
-          onZoomOut: handleZoomOut,
-          onResetZoom: handleResetZoom,
-          onActualSize: handleActualSize,
-          showRulers: showRulers,
-          onToggleRulers: handleToggleRulers,
-          showGuides: showGuides,
-          onToggleGuides: handleToggleGuides,
-          showGrid: showGrid,
-          onToggleGrid: handleToggleGrid,
-          showLayers: showLayers,
-          onToggleLayers: handleToggleLayers,
-          showProperties: true,
-          onToggleToolbarColumns: () => showToast('Toolbar Layout Toggled'),
-          onShowShortcuts: () => setShowShortcutsModal(true),
-          onOpenGithub: () => {
-            if (typeof window !== 'undefined') {
-              window.open('https://github.com/forma-design/forma', '_blank');
-            }
-          },
-        }}
+        documentTitle={artboard?.name || 'Untitled-1'}
+        isModified={historyIndex > 0}
+        onCloseDocument={handleNewDocument}
+        onOpenCommandSearch={() => setShowShortcutsModal(true)}
+        onWorkspaceChange={(ws) => showToast(`Workspace: ${ws}`)}
       />
 
       <div className="relative flex flex-1 w-full overflow-hidden">

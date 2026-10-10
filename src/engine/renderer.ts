@@ -8,8 +8,11 @@ import {
   Point,
   AnchorPoint,
   Artboard,
+  SelectedAnchorIndex,
 } from '../types/vector';
 import { getElementBoundingBox, getHandlePositions, HandleType } from './transform';
+import { calculateCollectiveBounds, drawTransformBoundingBox } from '../utils/transformHandles';
+import { drawDirectSelectionGizmos, drawDirectSelectionMarquee } from '../utils/bezierMath';
 
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
@@ -19,10 +22,14 @@ export interface RenderContext {
   zoom: number;
   elements: VectorElement[];
   selectedId: string | null;
+  selectedIds?: string[];
+  currentTool?: string;
   activePenPath: PathElement | null;
   penMousePos: Point | null;
   isHoveringClosePoint: boolean;
   selectedAnchorIndex: number | null;
+  selectedAnchorIndices?: SelectedAnchorIndex[];
+  marqueeRect?: { minX: number; minY: number; maxX: number; maxY: number } | null;
   showGrid?: boolean;
   artboard?: Artboard | null;
   isArtboardTool?: boolean;
@@ -93,16 +100,50 @@ export function renderCanvas(rc: RenderContext) {
     drawPathGizmos(ctx, activePenPath, zoom, selectedAnchorIndex);
   }
 
-  // 4. Draw selection overlays for the selected element
-  if (selectedId && (!activePenPath || activePenPath.id !== selectedId)) {
-    const selectedEl = elements.find((e) => e.id === selectedId);
-    if (selectedEl) {
-      drawInteractiveBoundingBox(ctx, selectedEl, zoom);
-      if (selectedEl.type === 'path' && selectedAnchorIndex !== null) {
-        drawPathGizmos(ctx, selectedEl, zoom, selectedAnchorIndex);
+  // 4. Draw selection overlays for active selected elements
+  const targetIds = rc.selectedIds && rc.selectedIds.length > 0
+    ? rc.selectedIds
+    : (selectedId ? [selectedId] : []);
+
+  const isDirectSelect = rc.currentTool === 'direct-select' || rc.currentTool === 'directSelection';
+
+  if (isDirectSelect) {
+    // In Direct Selection Mode:
+    // - Do NOT draw the whole-shape bounding box or transform handles.
+    // - Draw hollow square points (4x4px white fill, 1.5px #0d99ff border) for all path anchors.
+    // - Draw solid square points (#0d99ff filled) for currently selected anchor points.
+    // - For selected anchors, draw direction lines connecting to their handleIn & handleOut circular control points (round dots, 4px diameter).
+    const activeSelectedAnchors = rc.selectedAnchorIndices || [];
+
+    // Target shapes: if specific paths are selected, draw them; otherwise draw all visible paths so user can direct-select any anchor
+    const shapesToDraw = targetIds.length > 0
+      ? (elements.filter((el) => targetIds.includes(el.id) && el.type === 'path') as PathElement[])
+      : (elements.filter((el) => el.type === 'path' && el.visible !== false) as PathElement[]);
+
+    for (const pathEl of shapesToDraw) {
+      drawDirectSelectionGizmos(ctx, pathEl, zoom, activeSelectedAnchors);
+    }
+
+    if (rc.marqueeRect) {
+      drawDirectSelectionMarquee(ctx, rc.marqueeRect, zoom);
+    }
+  } else {
+    // Standard Selection Mode: Draw bounding box & transform handles
+    if (targetIds.length > 0 && (!activePenPath || !targetIds.includes(activePenPath.id))) {
+      const collectiveBounds = calculateCollectiveBounds(elements, targetIds);
+      if (collectiveBounds) {
+        drawTransformBoundingBox(ctx, collectiveBounds, zoom);
       }
-      if (selectedEl.gradient) {
-        drawGradientGizmos(ctx, selectedEl, zoom);
+      if (targetIds.length === 1) {
+        const selectedEl = elements.find((e) => e.id === targetIds[0]);
+        if (selectedEl) {
+          if (selectedEl.type === 'path' && selectedAnchorIndex !== null) {
+            drawPathGizmos(ctx, selectedEl, zoom, selectedAnchorIndex);
+          }
+          if (selectedEl.gradient) {
+            drawGradientGizmos(ctx, selectedEl, zoom);
+          }
+        }
       }
     }
   }
@@ -692,60 +733,19 @@ export function drawInteractiveBoundingBox(
   zoom: number
 ) {
   const box = getElementBoundingBox(el);
-  const handles = getHandlePositions(box);
-  const lineWidth = Math.max(1, 1.2 / zoom);
-  const handleSize = Math.max(6, 7 / zoom);
-
-  ctx.save();
-
-  // 1. Bounding box border
-  ctx.strokeStyle = '#38bdf8';
-  ctx.lineWidth = lineWidth;
-  ctx.strokeRect(box.minX, box.minY, box.width, box.height);
-
-  // 2. Center Pivot Indicator
-  ctx.fillStyle = '#38bdf8';
-  ctx.beginPath();
-  ctx.arc(box.centerX, box.centerY, Math.max(2.5, 3 / zoom), 0, Math.PI * 2);
-  ctx.fill();
-
-  // Center crosshair
-  const crossSize = Math.max(4, 5 / zoom);
-  ctx.beginPath();
-  ctx.moveTo(box.centerX - crossSize, box.centerY);
-  ctx.lineTo(box.centerX + crossSize, box.centerY);
-  ctx.moveTo(box.centerX, box.centerY - crossSize);
-  ctx.lineTo(box.centerX, box.centerY + crossSize);
-  ctx.stroke();
-
-  // 3. Subtle corner rotation hints (small arcs outside corners)
-  const rotOffset = Math.max(12, 14 / zoom);
-  const cornerKeys: Array<'nw' | 'ne' | 'se' | 'sw'> = ['nw', 'ne', 'se', 'sw'];
-  ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
-  ctx.lineWidth = Math.max(0.75, 1 / zoom);
-
-  for (const ck of cornerKeys) {
-    const pt = handles[ck];
-    const dx = ck.includes('w') ? -rotOffset : rotOffset;
-    const dy = ck.includes('n') ? -rotOffset : rotOffset;
-    ctx.beginPath();
-    ctx.arc(pt.x + dx * 0.4, pt.y + dy * 0.4, Math.max(3, 4 / zoom), 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  // 4. Render all 8 square handles (corners + edge centers)
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#0284c7';
-  ctx.lineWidth = lineWidth * 1.3;
-
-  const handleKeys: HandleType[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-  for (const hk of handleKeys) {
-    const pt = handles[hk];
-    ctx.fillRect(pt.x - handleSize / 2, pt.y - handleSize / 2, handleSize, handleSize);
-    ctx.strokeRect(pt.x - handleSize / 2, pt.y - handleSize / 2, handleSize, handleSize);
-  }
-
-  ctx.restore();
+  drawTransformBoundingBox(
+    ctx,
+    {
+      x: box.minX,
+      y: box.minY,
+      width: box.width,
+      height: box.height,
+      rotation: el.rotation || 0,
+      centerX: box.centerX,
+      centerY: box.centerY,
+    },
+    zoom
+  );
 }
 
 /**

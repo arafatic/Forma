@@ -54,9 +54,13 @@ function paperPathToFormaPath(p: paper.Path, fallbackName: string): PathElement 
         : null;
 
     points.push({
+      x: pt.x,
+      y: pt.y,
       point: pt,
       handleIn: hIn,
       handleOut: hOut,
+      pointType: hIn || hOut ? 'smooth' : 'corner',
+      isCorner: !(hIn || hOut),
     });
   }
 
